@@ -138,17 +138,22 @@ final class PinPanelManager {
         let minWidth: CGFloat = 40
         let minHeight: CGFloat = 40
         let toolbarHeight: CGFloat = item.showToolbar ? 58 : 0
+        let inspectorHeight: CGFloat = item.showInspector ? 210 : 0
+        let inspectorSpacing: CGFloat = item.showInspector ? 12 : 0
 
         let requestedWidth = item.originalRect.width * item.zoom
         let requestedHeight = item.originalRect.height * item.zoom
-        let availableImageHeight = max(40, maxHeight - toolbarHeight)
+        let availableImageHeight = max(40, maxHeight - toolbarHeight - inspectorHeight - inspectorSpacing)
 
         let widthRatio = maxWidth / max(requestedWidth, 1)
         let heightRatio = availableImageHeight / max(requestedHeight, 1)
         let fitScale = min(1, widthRatio, heightRatio)
 
         let width = max(minWidth, requestedWidth * fitScale)
-        let height = max(minHeight, requestedHeight * fitScale + toolbarHeight)
+        let height = max(
+            minHeight,
+            requestedHeight * fitScale + toolbarHeight + inspectorHeight + inspectorSpacing
+        )
 
         return NSSize(width: width, height: height)
     }

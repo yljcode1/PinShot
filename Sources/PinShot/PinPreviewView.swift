@@ -19,13 +19,18 @@ struct PinPreviewView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
+        VStack(spacing: 8) {
             captureSurface
 
             if isSelected && item.showToolbar {
                 toolbarView
                     .padding(.top, -4)
                     .zIndex(1)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+
+            if item.showInspector {
+                inspectorView
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
@@ -123,13 +128,6 @@ struct PinPreviewView: View {
                         appModel.toggleToolbar(for: item)
                     }
                 )
-            }
-        }
-        .overlay(alignment: .bottom) {
-            if item.showInspector {
-                inspectorView
-                    .padding(10)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
         .aspectRatio(captureAspectRatio, contentMode: .fit)
@@ -357,12 +355,8 @@ struct PinPreviewView: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .padding(12)
+        .pinShotGlassCard()
         .frame(maxWidth: .infinity)
-        .background(
-            RoundedRectangle(cornerRadius: 14)
-                .fill(.ultraThinMaterial)
-        )
         .help("这里会显示识别和翻译结果；点贴图空白处可收起这个面板")
     }
 }
