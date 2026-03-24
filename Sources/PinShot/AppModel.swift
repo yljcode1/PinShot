@@ -387,7 +387,7 @@ final class AppModel {
         let service = ocrService
         Task.detached(priority: .userInitiated) { [weak self] in
             let text = await service.recognizeText(cgImage: cgImage)
-            await MainActor.run {
+            await MainActor.run { [weak self] in
                 guard let self else { return }
                 let value = text.isEmpty ? "没有识别到文字" : text
                 item.recognizedText = value
