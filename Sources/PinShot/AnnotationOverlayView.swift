@@ -12,6 +12,10 @@ struct AnnotationOverlayView: NSViewRepresentable {
             item.annotations.append(annotation)
             appModel.refreshCapture(item)
         }
+        view.onDeleteAnnotation = { annotationID in
+            item.annotations.removeAll { $0.id == annotationID }
+            appModel.refreshCapture(item)
+        }
         view.onUpdateAnnotation = { annotation in
             guard let index = item.annotations.firstIndex(where: { $0.id == annotation.id }) else { return }
             item.annotations[index] = annotation
@@ -37,6 +41,10 @@ struct AnnotationOverlayView: NSViewRepresentable {
         nsView.lineWidth = item.annotationLineWidth
         nsView.onAppendAnnotation = { annotation in
             item.annotations.append(annotation)
+            appModel.refreshCapture(item)
+        }
+        nsView.onDeleteAnnotation = { annotationID in
+            item.annotations.removeAll { $0.id == annotationID }
             appModel.refreshCapture(item)
         }
         nsView.onUpdateAnnotation = { annotation in
@@ -92,6 +100,7 @@ final class AnnotationDrawingView: NSView, NSTextFieldDelegate {
     var annotationColor: AnnotationColor = .red
     var lineWidth: CGFloat = 3
     var onAppendAnnotation: ((ImageAnnotation) -> Void)?
+    var onDeleteAnnotation: ((UUID) -> Void)?
     var onUpdateAnnotation: ((ImageAnnotation) -> Void)?
     var onRequestTextTool: (() -> Void)?
     var onStatusMessage: ((String) -> Void)?
@@ -111,7 +120,11 @@ final class AnnotationDrawingView: NSView, NSTextFieldDelegate {
     private var activeTextOrigin: CGPoint?
     private var activeTextBaseWidth: CGFloat = 180
     private var activeTextFontSize: CGFloat = 22
+    private var activeTextColor: AnnotationColor = .red
+    private var activeEditingAnnotationID: UUID?
     private var selectedTextAnnotationID: UUID?
+    private var suppressTextCreationOnNextClick = false
+    private var isFinishingTextEditing = false
     private var textInteractionMode: TextInteractionMode = .none
     private var textInteractionStartPoint: CGPoint?
     private var textInteractionStartViewPoint: CGPoint?
@@ -155,6 +168,9 @@ final class AnnotationDrawingView: NSView, NSTextFieldDelegate {
         if handleCommandShortcut(event) {
             return
         }
+        if handleDeleteShortcut(event) {
+            return
+        }
         super.keyDown(with: event)
     }
 
@@ -163,7 +179,7 @@ final class AnnotationDrawingView: NSView, NSTextFieldDelegate {
         let viewPoint = convert(event.locationInWindow, from: nil)
 
         if tool == .text {
-            handleTextMouseDown(at: viewPoint)
+            handleTextMouseDown(with: event, at: viewPoint)
             return
         }
 
@@ -291,8 +307,23 @@ final class AnnotationDrawingView: NSView, NSTextFieldDelegate {
     }
 
     override func resignFirstResponder() -> Bool {
+        if activeTextField != nil {
+            return super.resignFirstResponder()
+        }
         finishTextEditing(commit: true)
         return super.resignFirstResponder()
+    }
+
+    func controlTextDidEndEditing(_ notification: Notification) {
+        guard !isFinishingTextEditing else { return }
+        guard let field = notification.object as? NSTextField,
+              field === activeTextField else {
+            return
+        }
+
+        let movement = notification.userInfo?["NSTextMovement"] as? Int ?? NSOtherTextMovement
+        suppressTextCreationOnNextClick = movement == NSOtherTextMovement
+        finishTextEditing(commit: true)
     }
 
     fileprivate func syncSelectionState() {
@@ -344,7 +375,20 @@ final class AnnotationDrawingView: NSView, NSTextFieldDelegate {
         return annotations.first(where: { $0.id == selectedTextAnnotationID })
     }
 
-    private func handleTextMouseDown(at viewPoint: CGPoint) {
+    private func handleTextMouseDown(with event: NSEvent, at viewPoint: CGPoint) {
+        if activeTextField != nil {
+            suppressTextCreationOnNextClick = false
+            finishTextEditing(commit: true)
+            clearTextSelection()
+            return
+        }
+
+        if suppressTextCreationOnNextClick {
+            suppressTextCreationOnNextClick = false
+            clearTextSelection()
+            return
+        }
+
         finishTextEditing(commit: true)
 
         if let selectedTextAnnotation, let handleFrame = textResizeHandleFrame(for: selectedTextAnnotation), handleFrame.contains(viewPoint) {
@@ -354,7 +398,14 @@ final class AnnotationDrawingView: NSView, NSTextFieldDelegate {
 
         if let annotation = textAnnotation(at: viewPoint) {
             selectedTextAnnotationID = annotation.id
+            if event.clickCount >= 2 {
+                beginTextEditing(for: annotation)
+                onStatusMessage?("编辑文字：Enter 提交，Esc 取消")
+                needsDisplay = true
+                return
+            }
             beginTextInteraction(.moving, annotation: annotation, at: viewPoint)
+            onStatusMessage?("文字已选中：拖动可移动，拖右下角可调大小，双击可编辑")
             needsDisplay = true
             return
         }
@@ -381,6 +432,7 @@ final class AnnotationDrawingView: NSView, NSTextFieldDelegate {
         switch mode {
         case .creating:
             beginTextEditing(at: normalizedPoint(viewPoint))
+            onStatusMessage?("输入文字：Enter 提交，Esc 取消")
         case .moving, .resizing:
             commitTextInteractionIfNeeded()
         case .none:
@@ -503,6 +555,10 @@ final class AnnotationDrawingView: NSView, NSTextFieldDelegate {
     private func drawSelection(for annotation: ImageAnnotation, in context: CGContext) {
         guard let selectionFrame = textSelectionFrame(for: annotation) else { return }
 
+        context.setFillColor(NSColor.systemBlue.withAlphaComponent(0.08).cgColor)
+        context.addPath(CGPath(roundedRect: selectionFrame, cornerWidth: 6, cornerHeight: 6, transform: nil))
+        context.fillPath()
+
         context.setStrokeColor(NSColor.systemBlue.withAlphaComponent(0.92).cgColor)
         context.setLineWidth(1.6)
         context.addPath(CGPath(roundedRect: selectionFrame, cornerWidth: 6, cornerHeight: 6, transform: nil))
@@ -584,6 +640,32 @@ final class AnnotationDrawingView: NSView, NSTextFieldDelegate {
         default:
             return false
         }
+    }
+
+    private func handleDeleteShortcut(_ event: NSEvent) -> Bool {
+        guard activeTextField == nil,
+              tool == .text,
+              let selectedTextAnnotationID,
+              isDeleteEvent(event) else {
+            return false
+        }
+
+        onDeleteAnnotation?(selectedTextAnnotationID)
+        clearTextSelection()
+        onStatusMessage?("文字标注已删除")
+        return true
+    }
+
+    private func isDeleteEvent(_ event: NSEvent) -> Bool {
+        if event.keyCode == 51 || event.keyCode == 117 {
+            return true
+        }
+
+        guard let characters = event.charactersIgnoringModifiers else {
+            return false
+        }
+
+        return characters.contains("\u{8}") || characters.contains("\u{7F}")
     }
 
     private func ensureKeyboardFocusIfNeeded(force: Bool = false) {
@@ -692,17 +774,53 @@ final class AnnotationDrawingView: NSView, NSTextFieldDelegate {
     }
 
     private func beginTextEditing(at point: CGPoint) {
-        activeTextBaseWidth = 180
-        activeTextFontSize = 22
-        selectedTextAnnotationID = nil
+        beginTextEditing(
+            content: "",
+            origin: point,
+            fontSize: 22,
+            color: annotationColor,
+            editingAnnotationID: nil
+        )
+    }
 
-        let field = NSTextField(frame: textFieldFrame(for: point))
-        field.stringValue = ""
+    private func beginTextEditing(for annotation: ImageAnnotation) {
+        guard let content = annotation.textContent,
+              let origin = annotation.textOrigin else {
+            return
+        }
+
+        beginTextEditing(
+            content: content,
+            origin: origin,
+            fontSize: annotation.fontSize,
+            color: annotation.color,
+            editingAnnotationID: annotation.id
+        )
+    }
+
+    private func beginTextEditing(
+        content: String,
+        origin: CGPoint,
+        fontSize: CGFloat,
+        color: AnnotationColor,
+        editingAnnotationID: UUID?
+    ) {
+        finishTextEditing(commit: true)
+
+        activeTextBaseWidth = idealTextEditorWidth(for: content, fontSize: fontSize)
+        activeTextFontSize = fontSize
+        activeTextColor = color
+        activeEditingAnnotationID = editingAnnotationID
+        selectedTextAnnotationID = editingAnnotationID
+        let normalizedOrigin = normalizedPoint(denormalizedPoint(origin, in: bounds))
+
+        let field = NSTextField(frame: textFieldFrame(for: normalizedOrigin))
+        field.stringValue = content
         field.placeholderString = "输入文本"
         field.isBordered = false
         field.drawsBackground = true
         field.backgroundColor = NSColor.white.withAlphaComponent(0.94)
-        field.textColor = annotationColor.nsColor
+        field.textColor = color.nsColor
         field.font = NSFont.systemFont(ofSize: activeTextFontSize * annotationScale, weight: .semibold)
         field.focusRingType = .none
         field.delegate = self
@@ -721,34 +839,52 @@ final class AnnotationDrawingView: NSView, NSTextFieldDelegate {
         addSubview(handle)
         activeTextField = field
         activeResizeHandle = handle
-        activeTextOrigin = point
+        activeTextOrigin = normalizedOrigin
         updateActiveTextEditingLayout()
         window?.makeFirstResponder(field)
+        field.selectText(nil)
     }
 
     private func finishTextEditing(commit: Bool) {
-        guard let activeTextField, let activeTextOrigin else { return }
+        guard !isFinishingTextEditing,
+              let activeTextField,
+              let activeTextOrigin else { return }
+
+        isFinishingTextEditing = true
 
         let content = activeTextField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        activeTextField.removeFromSuperview()
-        activeResizeHandle?.removeFromSuperview()
+        let editingAnnotationID = activeEditingAnnotationID
+        let activeResizeHandle = activeResizeHandle
         self.activeTextField = nil
         self.activeResizeHandle = nil
         self.activeTextOrigin = nil
+        self.activeEditingAnnotationID = nil
+        activeTextField.removeFromSuperview()
+        activeResizeHandle?.removeFromSuperview()
+        defer { isFinishingTextEditing = false }
 
         guard commit, !content.isEmpty else {
+            if !commit {
+                selectedTextAnnotationID = editingAnnotationID
+            }
             needsDisplay = true
             return
         }
 
         let annotation = ImageAnnotation(
+            id: editingAnnotationID ?? UUID(),
             kind: .text(content: content, origin: activeTextOrigin),
-            color: annotationColor,
+            color: activeTextColor,
             lineWidth: lineWidth,
             fontSize: activeTextFontSize
         )
         selectedTextAnnotationID = annotation.id
-        onAppendAnnotation?(annotation)
+        if editingAnnotationID == nil {
+            onAppendAnnotation?(annotation)
+        } else {
+            replaceLocal(annotation: annotation)
+            onUpdateAnnotation?(annotation)
+        }
     }
 
     private func textFieldFrame(for point: CGPoint) -> CGRect {
@@ -779,6 +915,15 @@ final class AnnotationDrawingView: NSView, NSTextFieldDelegate {
             max(TextEditorMetrics.minFontSize, activeTextFontSize + delta.height / scale)
         )
         updateActiveTextEditingLayout()
+    }
+
+    private func idealTextEditorWidth(for content: String, fontSize: CGFloat) -> CGFloat {
+        guard !content.isEmpty else { return 180 }
+        let renderedWidth = renderedTextSize(content: content, fontSize: fontSize).width / max(annotationScale, 0.001)
+        return min(
+            TextEditorMetrics.maxWidth,
+            max(TextEditorMetrics.minWidth, renderedWidth + 28)
+        )
     }
 }
 

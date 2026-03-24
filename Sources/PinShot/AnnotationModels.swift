@@ -53,9 +53,23 @@ struct ImageAnnotation: Identifiable, Equatable {
         case text(content: String, origin: CGPoint)
     }
 
-    let id = UUID()
+    let id: UUID
     var kind: Kind
     var color: AnnotationColor
     var lineWidth: CGFloat
     var fontSize: CGFloat = 22
+
+    init(
+        id: UUID = UUID(),
+        kind: Kind,
+        color: AnnotationColor,
+        lineWidth: CGFloat,
+        fontSize: CGFloat = 22
+    ) {
+        self.id = id
+        self.kind = kind
+        self.color = color
+        self.lineWidth = lineWidth
+        self.fontSize = fontSize
+    }
 }

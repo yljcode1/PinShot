@@ -72,6 +72,7 @@ final class AppModel {
     }
 
     func copyImage(for item: CaptureItem) {
+        panelManager.commitEditing(for: item.id)
         let outputImage = AnnotationRenderer.render(item: item) ?? item.image
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
@@ -80,11 +81,9 @@ final class AppModel {
     }
 
     func saveImage(for item: CaptureItem) {
-        let outputImage = AnnotationRenderer.render(item: item) ?? item.image
+        panelManager.commitEditing(for: item.id)
 
-        guard let tiffData = outputImage.tiffRepresentation,
-              let bitmapImage = NSBitmapImageRep(data: tiffData),
-              let pngData = bitmapImage.representation(using: .png, properties: [:]) else {
+        guard let pngData = AnnotationRenderer.pngData(item: item) else {
             statusMessage = "保存失败：无法导出 PNG"
             return
         }
@@ -140,31 +139,23 @@ final class AppModel {
     }
 
     func toggleInspector(for item: CaptureItem) {
-        selectCapture(item)
+        let changedCaptures = applySelection(to: item)
         item.showInspector.toggle()
         item.showToolbar = true
-        panelManager.refresh(item: item, appModel: self)
+        refreshCaptures(changedCaptures + [item])
     }
 
     func toggleToolbar(for item: CaptureItem) {
-        selectCapture(item)
+        let changedCaptures = applySelection(to: item)
         item.showToolbar.toggle()
         if !item.showToolbar {
             item.showInspector = false
         }
-        panelManager.refresh(item: item, appModel: self)
+        refreshCaptures(changedCaptures + [item])
     }
 
     func selectCapture(_ item: CaptureItem) {
-        selectedCaptureID = item.id
-        for capture in captures {
-            if capture.id == item.id {
-                continue
-            }
-            capture.showToolbar = false
-            capture.showInspector = false
-        }
-        refreshAllCaptures()
+        refreshCaptures(applySelection(to: item))
     }
 
     func isSelected(_ item: CaptureItem) -> Bool {
@@ -172,7 +163,7 @@ final class AppModel {
     }
 
     func setAnnotationTool(_ tool: AnnotationTool, for item: CaptureItem) {
-        selectCapture(item)
+        let changedCaptures = applySelection(to: item)
         item.annotationTool = tool
         item.showToolbar = true
         switch tool {
@@ -189,33 +180,36 @@ final class AppModel {
         case .text:
             statusMessage = "文字模式：点击图片输入，或直接按 Command+V 粘贴文字"
         }
-        panelManager.refresh(item: item, appModel: self)
+        refreshCaptures(changedCaptures + [item])
     }
 
     func setAnnotationColor(_ color: AnnotationColor, for item: CaptureItem) {
         item.annotationColor = color
         item.showToolbar = true
-        panelManager.refresh(item: item, appModel: self)
+        refreshCaptures([item])
     }
 
     func undoLastAnnotation(for item: CaptureItem) {
         guard !item.annotations.isEmpty else { return }
         item.annotations.removeLast()
-        panelManager.refresh(item: item, appModel: self)
+        refreshCaptures([item])
     }
 
     func clearAnnotations(for item: CaptureItem) {
         item.annotations.removeAll()
-        panelManager.refresh(item: item, appModel: self)
+        refreshCaptures([item])
     }
 
     func removeCapture(_ item: CaptureItem) {
+        let wasSelected = selectedCaptureID == item.id
         captures.removeAll { $0.id == item.id }
-        if selectedCaptureID == item.id {
+        if wasSelected {
             selectedCaptureID = captures.first?.id
         }
         panelManager.closePanel(for: item.id)
-        refreshAllCaptures()
+        if let selectedCapture = capture(with: selectedCaptureID) {
+            refreshCaptures([selectedCapture])
+        }
     }
 
     func closeAllPins() {
@@ -293,9 +287,9 @@ final class AppModel {
             return false
         }
 
-        if selectedCaptureID != item.id {
-            selectedCaptureID = item.id
-            refreshAllCaptures()
+        let changedCaptures = applySelection(to: item)
+        if !changedCaptures.isEmpty {
+            refreshCaptures(changedCaptures.filter { $0.id != item.id })
         }
 
         magnify(for: item, magnification: magnification)
@@ -332,9 +326,42 @@ final class AppModel {
         UserDefaults.standard.set(data, forKey: Self.hotKeyDefaultsKey)
     }
 
-    private func refreshAllCaptures() {
-        for capture in captures {
-            panelManager.refresh(item: capture, appModel: self)
+    private func capture(with id: UUID?) -> CaptureItem? {
+        guard let id else { return nil }
+        return captures.first(where: { $0.id == id })
+    }
+
+    private func applySelection(to item: CaptureItem) -> [CaptureItem] {
+        var changedCaptures: [CaptureItem] = []
+
+        if selectedCaptureID != item.id {
+            if let previouslySelectedCapture = capture(with: selectedCaptureID) {
+                changedCaptures.append(previouslySelectedCapture)
+            }
+            selectedCaptureID = item.id
+            changedCaptures.append(item)
         }
+
+        for capture in captures where capture.id != item.id {
+            if capture.showToolbar || capture.showInspector {
+                capture.showToolbar = false
+                capture.showInspector = false
+                changedCaptures.append(capture)
+            }
+        }
+
+        return changedCaptures
+    }
+
+    private func refreshCaptures(_ items: [CaptureItem]) {
+        var refreshedIDs = Set<UUID>()
+
+        for item in items where refreshedIDs.insert(item.id).inserted {
+            panelManager.refresh(item: item, appModel: self)
+        }
+    }
+
+    private func refreshAllCaptures() {
+        refreshCaptures(captures)
     }
 }

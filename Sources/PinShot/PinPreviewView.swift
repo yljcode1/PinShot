@@ -269,7 +269,7 @@ struct PinPreviewView: View {
         case .arrow:
             return "绘制箭头，指向重点内容"
         case .text:
-            return "添加文字标注；点文字可移动和调大小，也支持 ⌘V 直接粘贴文字"
+            return "添加文字标注；单击可选中和拖动，双击可编辑，也支持 ⌘V 直接粘贴文字"
         }
     }
 

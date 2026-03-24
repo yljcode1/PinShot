@@ -7,10 +7,8 @@ final class PinPanelManager {
 
     func present(item: CaptureItem, appModel: AppModel) {
         if let panel = panels[item.id],
-           let hostingController = panel.contentViewController as? NSHostingController<PinPreviewView> {
-            hostingController.rootView = PinPreviewView(appModel: appModel, item: item)
-            panel.alphaValue = item.opacity
-            panel.isMovableByWindowBackground = false
+           panel.contentViewController is NSHostingController<PinPreviewView> {
+            updatePanel(panel, with: item, appModel: appModel)
             panel.orderFrontRegardless()
             return
         }
@@ -36,14 +34,15 @@ final class PinPanelManager {
         panel.alphaValue = item.opacity
         panel.hidesOnDeactivate = false
         panel.contentViewController = hostingController
-        setFrame(
-            panel,
-            size: size,
-            topLeft: CGPoint(x: item.originalRect.minX, y: item.originalRect.maxY)
-        )
         panel.isReleasedWhenClosed = false
 
         panels[item.id] = panel
+        updatePanel(
+            panel,
+            with: item,
+            appModel: appModel,
+            topLeft: CGPoint(x: item.originalRect.minX, y: item.originalRect.maxY)
+        )
         panel.orderFrontRegardless()
     }
 
@@ -52,16 +51,14 @@ final class PinPanelManager {
     }
 
     func refresh(item: CaptureItem, appModel: AppModel) {
-        guard let panel = panels[item.id],
-              let hostingController = panel.contentViewController as? NSHostingController<PinPreviewView> else {
-            return
-        }
+        guard let panel = panels[item.id] else { return }
+        updatePanel(panel, with: item, appModel: appModel)
+    }
 
-        hostingController.rootView = PinPreviewView(appModel: appModel, item: item)
-        panel.isMovableByWindowBackground = false
-        let size = preferredPanelSize(for: item)
-        let currentTopLeft = CGPoint(x: panel.frame.minX, y: panel.frame.maxY)
-        setFrame(panel, size: size, topLeft: currentTopLeft)
+    func commitEditing(for id: UUID) {
+        guard let panel = panels[id] else { return }
+        panel.makeFirstResponder(nil)
+        panel.endEditing(for: nil)
     }
 
     func closePanel(for id: UUID) {
@@ -102,8 +99,28 @@ final class PinPanelManager {
         panels.first(where: { $0.value.frame.contains(screenPoint) })?.key
     }
 
-    private func preferredPanelSize(for item: CaptureItem) -> NSSize {
-        let visibleFrame = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+    private func updatePanel(
+        _ panel: NSPanel,
+        with item: CaptureItem,
+        appModel: AppModel,
+        topLeft: CGPoint? = nil
+    ) {
+        guard let hostingController = panel.contentViewController as? NSHostingController<PinPreviewView> else {
+            return
+        }
+
+        hostingController.rootView = PinPreviewView(appModel: appModel, item: item)
+        panel.alphaValue = item.opacity
+        panel.isMovableByWindowBackground = false
+
+        let size = preferredPanelSize(for: item, in: panel)
+        let targetTopLeft = topLeft ?? CGPoint(x: panel.frame.minX, y: panel.frame.maxY)
+        setFrame(panel, size: size, topLeft: targetTopLeft)
+    }
+
+    private func preferredPanelSize(for item: CaptureItem, in panel: NSPanel? = nil) -> NSSize {
+        let visibleFrame = screenForLayout(of: item, panel: panel)?.visibleFrame
+            ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
         let maxWidth: CGFloat = visibleFrame.width * 0.94
         let maxHeight: CGFloat = visibleFrame.height * 0.94
         let minWidth: CGFloat = 40
@@ -124,10 +141,20 @@ final class PinPanelManager {
         return NSSize(width: width, height: height)
     }
 
+    private func screenForLayout(of item: CaptureItem, panel: NSPanel?) -> NSScreen? {
+        if let panelScreen = panel?.screen {
+            return panelScreen
+        }
+
+        let midpoint = CGPoint(x: item.originalRect.midX, y: item.originalRect.midY)
+        return NSScreen.screens.first(where: { $0.frame.contains(midpoint) }) ?? NSScreen.main
+    }
+
     private func setFrame(_ panel: NSPanel, size: NSSize, topLeft: CGPoint) {
         let targetY = topLeft.y - size.height
 
         let frame = NSRect(x: topLeft.x, y: targetY, width: size.width, height: size.height)
+        guard panel.frame.integral != frame.integral else { return }
         panel.setFrame(frame, display: true, animate: false)
     }
 }

@@ -3,12 +3,27 @@ import AppKit
 @MainActor
 enum AnnotationRenderer {
     static func render(item: CaptureItem) -> NSImage? {
-        guard let baseCGImage = item.image.cgImage else {
+        guard let bitmap = renderBitmap(item: item) else {
             return item.image
         }
 
-        let width = baseCGImage.width
-        let height = baseCGImage.height
+        let rendered = NSImage(size: item.image.size)
+        rendered.addRepresentation(bitmap)
+        return rendered
+    }
+
+    static func pngData(item: CaptureItem) -> Data? {
+        renderBitmap(item: item)?.representation(using: .png, properties: [:])
+    }
+
+    private static func renderBitmap(item: CaptureItem) -> NSBitmapImageRep? {
+        let pixelSize = pixelSize(for: item.image)
+        guard pixelSize.width > 0, pixelSize.height > 0 else {
+            return nil
+        }
+
+        let width = Int(pixelSize.width.rounded(.up))
+        let height = Int(pixelSize.height.rounded(.up))
 
         guard let bitmap = NSBitmapImageRep(
             bitmapDataPlanes: nil,
@@ -29,28 +44,49 @@ enum AnnotationRenderer {
         bitmap.size = item.image.size
 
         NSGraphicsContext.saveGraphicsState()
+        defer { NSGraphicsContext.restoreGraphicsState() }
+
         guard let context = NSGraphicsContext(bitmapImageRep: bitmap) else {
-            NSGraphicsContext.restoreGraphicsState()
             return nil
         }
 
         NSGraphicsContext.current = context
-        let drawingRect = CGRect(x: 0, y: 0, width: width, height: height)
-        NSImage(cgImage: baseCGImage, size: NSSize(width: width, height: height)).draw(in: drawingRect)
+        let drawingRect = CGRect(origin: .zero, size: CGSize(width: width, height: height))
+        item.image.draw(
+            in: drawingRect,
+            from: CGRect(origin: .zero, size: item.image.size),
+            operation: .copy,
+            fraction: 1
+        )
+
+        let exportScale = min(
+            CGFloat(width) / max(item.image.size.width, 1),
+            CGFloat(height) / max(item.image.size.height, 1)
+        )
 
         for annotation in item.annotations {
-            draw(annotation: annotation, inPixelSize: CGSize(width: width, height: height))
+            draw(annotation: annotation, inPixelSize: CGSize(width: width, height: height), exportScale: exportScale)
         }
 
         context.flushGraphics()
-        NSGraphicsContext.restoreGraphicsState()
-
-        let rendered = NSImage(size: item.image.size)
-        rendered.addRepresentation(bitmap)
-        return rendered
+        return bitmap
     }
 
-    private static func draw(annotation: ImageAnnotation, inPixelSize size: CGSize) {
+    private static func pixelSize(for image: NSImage) -> CGSize {
+        if let cgImage = image.cgImage {
+            return CGSize(width: cgImage.width, height: cgImage.height)
+        }
+
+        if let bitmapRepresentation = image.representations
+            .compactMap({ $0 as? NSBitmapImageRep })
+            .max(by: { $0.pixelsWide * $0.pixelsHigh < $1.pixelsWide * $1.pixelsHigh }) {
+            return CGSize(width: bitmapRepresentation.pixelsWide, height: bitmapRepresentation.pixelsHigh)
+        }
+
+        return image.size
+    }
+
+    private static func draw(annotation: ImageAnnotation, inPixelSize size: CGSize, exportScale: CGFloat) {
         let color = annotation.color.nsColor
         color.setStroke()
 
@@ -58,7 +94,7 @@ enum AnnotationRenderer {
         case .freehand(let points):
             guard let first = points.first else { return }
             let path = NSBezierPath()
-            path.lineWidth = annotation.lineWidth * (size.width / max(1, size.width))
+            path.lineWidth = annotation.lineWidth * exportScale
             path.lineJoinStyle = .round
             path.lineCapStyle = .round
             path.move(to: pixelPoint(first, in: size))
@@ -70,7 +106,7 @@ enum AnnotationRenderer {
         case .rectangle(let rect):
             let frame = pixelRect(rect, in: size)
             let path = NSBezierPath(rect: frame)
-            path.lineWidth = annotation.lineWidth
+            path.lineWidth = annotation.lineWidth * exportScale
             path.stroke()
 
         case .arrow(let start, let end):
@@ -78,13 +114,13 @@ enum AnnotationRenderer {
             let endPoint = pixelPoint(end, in: size)
 
             let path = NSBezierPath()
-            path.lineWidth = annotation.lineWidth
+            path.lineWidth = annotation.lineWidth * exportScale
             path.lineCapStyle = .round
             path.move(to: startPoint)
             path.line(to: endPoint)
 
             let angle = atan2(endPoint.y - startPoint.y, endPoint.x - startPoint.x)
-            let headLength = max(14, annotation.lineWidth * 4)
+            let headLength = max(14 * exportScale, annotation.lineWidth * exportScale * 4)
             path.move(to: endPoint)
             path.line(to: CGPoint(
                 x: endPoint.x - headLength * cos(angle - .pi / 6),
@@ -101,7 +137,7 @@ enum AnnotationRenderer {
             let point = pixelPoint(origin, in: size)
             let attributes: [NSAttributedString.Key: Any] = [
                 .foregroundColor: annotation.color.nsColor,
-                .font: NSFont.systemFont(ofSize: annotation.fontSize * (size.width / max(1, size.width)), weight: .semibold)
+                .font: NSFont.systemFont(ofSize: annotation.fontSize * exportScale, weight: .semibold)
             ]
             NSAttributedString(string: content, attributes: attributes).draw(at: point)
         }
