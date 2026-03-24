@@ -15,6 +15,14 @@ final class AppModel {
     var isRecordingHotKey = false
     var statusMessage = "使用快捷键开始截图"
 
+    var hasCaptures: Bool {
+        !captures.isEmpty
+    }
+
+    var latestCapture: CaptureItem? {
+        captures.first
+    }
+
     private let screenshotService = ScreenshotService()
     private let ocrService = OCRService()
     private let hotKeyService = HotKeyService()
@@ -50,13 +58,23 @@ final class AppModel {
             selectCapture(item)
             panelManager.present(item: item, appModel: self)
 
-            let text = await ocrService.recognizeText(in: capture.image)
-            item.recognizedText = text.isEmpty ? "没有识别到文字" : text
-            item.isRecognizingText = false
-            statusMessage = "截图完成，结果已置顶显示"
+            guard let cgImage = capture.image.cgImage else {
+                item.isRecognizingText = false
+                item.recognizedText = "没有识别到文字"
+                statusMessage = "无法获取截图像素"
+                return
+            }
+
+            statusMessage = "正在识别文字并准备标注"
+            performOCR(for: item, cgImage: cgImage)
         } catch {
             statusMessage = "截图失败: \(error.localizedDescription)"
         }
+    }
+
+    func reopenLatestCapture() {
+        guard let first = captures.first else { return }
+        reopenPinnedPanel(for: first)
     }
 
     func copyRecognizedText(for item: CaptureItem) {
@@ -363,5 +381,19 @@ final class AppModel {
 
     private func refreshAllCaptures() {
         refreshCaptures(captures)
+    }
+
+    private func performOCR(for item: CaptureItem, cgImage: CGImage) {
+        let service = ocrService
+        Task.detached(priority: .userInitiated) { [weak self] in
+            let text = await service.recognizeText(cgImage: cgImage)
+            await MainActor.run {
+                guard let self else { return }
+                let value = text.isEmpty ? "没有识别到文字" : text
+                item.recognizedText = value
+                item.isRecognizingText = false
+                self.statusMessage = "截图完成，结果已置顶显示"
+            }
+        }
     }
 }

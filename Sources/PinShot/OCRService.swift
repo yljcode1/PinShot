@@ -1,12 +1,8 @@
-import AppKit
+import CoreGraphics
 @preconcurrency import Vision
 
 final class OCRService: @unchecked Sendable {
-    func recognizeText(in image: NSImage) async -> String {
-        guard let cgImage = image.cgImage else {
-            return ""
-        }
-
+    func recognizeText(cgImage: CGImage) async -> String {
         return await withCheckedContinuation { continuation in
             let request = VNRecognizeTextRequest { request, _ in
                 let observations = request.results as? [VNRecognizedTextObservation] ?? []

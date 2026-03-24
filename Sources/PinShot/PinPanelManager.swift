@@ -61,6 +61,18 @@ final class PinPanelManager {
         panel.endEditing(for: nil)
     }
 
+    func hideAllPanels() {
+        for panel in panels.values {
+            panel.orderOut(nil)
+        }
+    }
+
+    func showAllPanels() {
+        for panel in panels.values {
+            panel.orderFrontRegardless()
+        }
+    }
+
     func closePanel(for id: UUID) {
         panels[id]?.close()
         panels[id] = nil

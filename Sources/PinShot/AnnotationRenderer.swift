@@ -18,6 +18,7 @@ enum AnnotationRenderer {
 
     private static func renderBitmap(item: CaptureItem) -> NSBitmapImageRep? {
         let pixelSize = pixelSize(for: item.image)
+        let canvasSize = item.image.size
         guard pixelSize.width > 0, pixelSize.height > 0 else {
             return nil
         }
@@ -51,21 +52,16 @@ enum AnnotationRenderer {
         }
 
         NSGraphicsContext.current = context
-        let drawingRect = CGRect(origin: .zero, size: CGSize(width: width, height: height))
+        let drawingRect = CGRect(origin: .zero, size: canvasSize)
         item.image.draw(
             in: drawingRect,
-            from: CGRect(origin: .zero, size: item.image.size),
+            from: CGRect(origin: .zero, size: canvasSize),
             operation: .copy,
             fraction: 1
         )
 
-        let exportScale = min(
-            CGFloat(width) / max(item.image.size.width, 1),
-            CGFloat(height) / max(item.image.size.height, 1)
-        )
-
         for annotation in item.annotations {
-            draw(annotation: annotation, inPixelSize: CGSize(width: width, height: height), exportScale: exportScale)
+            draw(annotation: annotation, inCanvasSize: canvasSize)
         }
 
         context.flushGraphics()
@@ -86,7 +82,7 @@ enum AnnotationRenderer {
         return image.size
     }
 
-    private static func draw(annotation: ImageAnnotation, inPixelSize size: CGSize, exportScale: CGFloat) {
+    private static func draw(annotation: ImageAnnotation, inCanvasSize size: CGSize) {
         let color = annotation.color.nsColor
         color.setStroke()
 
@@ -94,33 +90,33 @@ enum AnnotationRenderer {
         case .freehand(let points):
             guard let first = points.first else { return }
             let path = NSBezierPath()
-            path.lineWidth = annotation.lineWidth * exportScale
+            path.lineWidth = annotation.lineWidth
             path.lineJoinStyle = .round
             path.lineCapStyle = .round
-            path.move(to: pixelPoint(first, in: size))
+            path.move(to: canvasPoint(first, in: size))
             for point in points.dropFirst() {
-                path.line(to: pixelPoint(point, in: size))
+                path.line(to: canvasPoint(point, in: size))
             }
             path.stroke()
 
         case .rectangle(let rect):
-            let frame = pixelRect(rect, in: size)
+            let frame = canvasRect(rect, in: size)
             let path = NSBezierPath(rect: frame)
-            path.lineWidth = annotation.lineWidth * exportScale
+            path.lineWidth = annotation.lineWidth
             path.stroke()
 
         case .arrow(let start, let end):
-            let startPoint = pixelPoint(start, in: size)
-            let endPoint = pixelPoint(end, in: size)
+            let startPoint = canvasPoint(start, in: size)
+            let endPoint = canvasPoint(end, in: size)
 
             let path = NSBezierPath()
-            path.lineWidth = annotation.lineWidth * exportScale
+            path.lineWidth = annotation.lineWidth
             path.lineCapStyle = .round
             path.move(to: startPoint)
             path.line(to: endPoint)
 
             let angle = atan2(endPoint.y - startPoint.y, endPoint.x - startPoint.x)
-            let headLength = max(14 * exportScale, annotation.lineWidth * exportScale * 4)
+            let headLength = max(14, annotation.lineWidth * 4)
             path.move(to: endPoint)
             path.line(to: CGPoint(
                 x: endPoint.x - headLength * cos(angle - .pi / 6),
@@ -134,20 +130,20 @@ enum AnnotationRenderer {
             path.stroke()
 
         case .text(let content, let origin):
-            let point = pixelPoint(origin, in: size)
+            let point = canvasPoint(origin, in: size)
             let attributes: [NSAttributedString.Key: Any] = [
                 .foregroundColor: annotation.color.nsColor,
-                .font: NSFont.systemFont(ofSize: annotation.fontSize * exportScale, weight: .semibold)
+                .font: NSFont.systemFont(ofSize: annotation.fontSize, weight: .semibold)
             ]
             NSAttributedString(string: content, attributes: attributes).draw(at: point)
         }
     }
 
-    private static func pixelPoint(_ point: CGPoint, in size: CGSize) -> CGPoint {
+    private static func canvasPoint(_ point: CGPoint, in size: CGSize) -> CGPoint {
         CGPoint(x: point.x * size.width, y: point.y * size.height)
     }
 
-    private static func pixelRect(_ rect: CGRect, in size: CGSize) -> CGRect {
+    private static func canvasRect(_ rect: CGRect, in size: CGSize) -> CGRect {
         CGRect(
             x: rect.minX * size.width,
             y: rect.minY * size.height,
