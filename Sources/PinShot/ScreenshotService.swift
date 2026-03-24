@@ -4,6 +4,7 @@ import Foundation
 
 struct CapturedSelection {
     let image: NSImage
+    let cgImage: CGImage
     let appKitRect: CGRect
 }
 
@@ -55,6 +56,6 @@ final class ScreenshotService {
         )
 
         let image = NSImage(cgImage: cgImage, size: selection.appKitRect.size)
-        return CapturedSelection(image: image, appKitRect: selection.appKitRect)
+        return CapturedSelection(image: image, cgImage: cgImage, appKitRect: selection.appKitRect)
     }
 }

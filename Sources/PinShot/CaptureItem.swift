@@ -7,6 +7,7 @@ import Observation
 final class CaptureItem: Identifiable {
     let id = UUID()
     let image: NSImage
+    let cgImage: CGImage
     let originalRect: CGRect
     let createdAt = Date()
     var recognizedText: String
@@ -25,12 +26,14 @@ final class CaptureItem: Identifiable {
 
     init(
         image: NSImage,
+        cgImage: CGImage,
         originalRect: CGRect,
         recognizedText: String = "正在识别文字...",
         opacity: Double = 0.96,
         zoom: Double = 1
     ) {
         self.image = image
+        self.cgImage = cgImage
         self.originalRect = originalRect
         self.recognizedText = recognizedText
         self.opacity = opacity

@@ -53,20 +53,17 @@ final class AppModel {
                 return
             }
 
-            let item = CaptureItem(image: capture.image, originalRect: capture.appKitRect)
+            let item = CaptureItem(
+                image: capture.image,
+                cgImage: capture.cgImage,
+                originalRect: capture.appKitRect
+            )
             captures.insert(item, at: 0)
             selectCapture(item)
             panelManager.present(item: item, appModel: self)
 
-            guard let cgImage = capture.image.cgImage else {
-                item.isRecognizingText = false
-                item.recognizedText = "没有识别到文字"
-                statusMessage = "无法获取截图像素"
-                return
-            }
-
             statusMessage = "正在识别文字并准备标注"
-            performOCR(for: item, cgImage: cgImage)
+            performOCR(for: item)
         } catch {
             statusMessage = "截图失败: \(error.localizedDescription)"
         }
@@ -184,6 +181,9 @@ final class AppModel {
         let changedCaptures = applySelection(to: item)
         item.annotationTool = tool
         item.showToolbar = true
+        if item.showInspector {
+            item.showInspector = false
+        }
         switch tool {
         case .none:
             statusMessage = "普通模式：可拖动贴图或手势缩放"
@@ -383,10 +383,10 @@ final class AppModel {
         refreshCaptures(captures)
     }
 
-    private func performOCR(for item: CaptureItem, cgImage: CGImage) {
+    private func performOCR(for item: CaptureItem) {
         let service = ocrService
         Task.detached(priority: .userInitiated) { [weak self] in
-            let text = await service.recognizeText(cgImage: cgImage)
+            let text = await service.recognizeText(cgImage: item.cgImage)
             await MainActor.run { [weak self] in
                 guard let self else { return }
                 let value = text.isEmpty ? "没有识别到文字" : text
