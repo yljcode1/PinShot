@@ -125,6 +125,7 @@ final class AnnotationDrawingView: NSView, NSTextFieldDelegate {
     private var selectedTextAnnotationID: UUID?
     private var suppressTextCreationOnNextClick = false
     private var isFinishingTextEditing = false
+    private var isActivatingTextField = false
     private var textInteractionMode: TextInteractionMode = .none
     private var textInteractionStartPoint: CGPoint?
     private var textInteractionStartViewPoint: CGPoint?
@@ -315,6 +316,7 @@ final class AnnotationDrawingView: NSView, NSTextFieldDelegate {
     }
 
     func controlTextDidEndEditing(_ notification: Notification) {
+        guard !isActivatingTextField else { return }
         guard !isFinishingTextEditing else { return }
         guard let field = notification.object as? NSTextField,
               field === activeTextField else {
@@ -411,7 +413,8 @@ final class AnnotationDrawingView: NSView, NSTextFieldDelegate {
         }
 
         selectedTextAnnotationID = nil
-        beginTextInteraction(.creating, annotation: nil, at: viewPoint)
+        beginTextEditing(at: normalizedPoint(viewPoint))
+        onStatusMessage?("输入文字：Enter 提交，Esc 取消")
         needsDisplay = true
     }
 
@@ -431,8 +434,7 @@ final class AnnotationDrawingView: NSView, NSTextFieldDelegate {
 
         switch mode {
         case .creating:
-            beginTextEditing(at: normalizedPoint(viewPoint))
-            onStatusMessage?("输入文字：Enter 提交，Esc 取消")
+            break
         case .moving, .resizing:
             commitTextInteractionIfNeeded()
         case .none:
@@ -812,6 +814,7 @@ final class AnnotationDrawingView: NSView, NSTextFieldDelegate {
         activeTextColor = color
         activeEditingAnnotationID = editingAnnotationID
         selectedTextAnnotationID = editingAnnotationID
+        isActivatingTextField = true
         let normalizedOrigin = normalizedPoint(denormalizedPoint(origin, in: bounds))
 
         let field = NSTextField(frame: textFieldFrame(for: normalizedOrigin))
@@ -841,8 +844,7 @@ final class AnnotationDrawingView: NSView, NSTextFieldDelegate {
         activeResizeHandle = handle
         activeTextOrigin = normalizedOrigin
         updateActiveTextEditingLayout()
-        window?.makeFirstResponder(field)
-        field.selectText(nil)
+        focusTextField(field)
     }
 
     private func finishTextEditing(commit: Bool) {
@@ -924,6 +926,19 @@ final class AnnotationDrawingView: NSView, NSTextFieldDelegate {
             TextEditorMetrics.maxWidth,
             max(TextEditorMetrics.minWidth, renderedWidth + 28)
         )
+    }
+
+    private func focusTextField(_ field: NSTextField) {
+        field.isEditable = true
+        field.isSelectable = true
+
+        DispatchQueue.main.async { [weak self, weak field] in
+            guard let self, let field, self.activeTextField === field else { return }
+            self.window?.makeKey()
+            self.window?.makeFirstResponder(field)
+            field.selectText(nil)
+            self.isActivatingTextField = false
+        }
     }
 }
 
