@@ -12,16 +12,35 @@ on:
 jobs:
   build:
     runs-on: macos-14
+    strategy:
+      matrix:
+        configuration: [debug, release]
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Build (debug)
-        run: swift build
+      - name: Cache SwiftPM build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build
+            /Users/runner/Library/Developer/Xcode/DerivedData
+          key: swiftpm-${{ runner.os }}-${{ matrix.configuration }}-${{ hashFiles('**/Package.resolved') }}
+          restore-keys: |
+            swiftpm-${{ runner.os }}-${{ matrix.configuration }}-
+            swiftpm-${{ runner.os }}-
 
-      - name: Build (release)
-        run: swift build -c release
+      - name: Build (${{ matrix.configuration }})
+        run: swift build -c ${{ matrix.configuration }}
 
-      - name: Run tests
-        run: swift test
+  tests:
+    runs-on: macos-14
+    needs: build
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Run test suite (parallel + coverage)
+        run: swift test --parallel --enable-code-coverage

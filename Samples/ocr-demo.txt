@@ -1,0 +1,13 @@
+PinShot OCR Demo Text
+---------------------
+
+Hello world!
+你好，世界！
+
+- Mixed language block to verify multilingual detection.
+- Numbers: 1234567890
+- Symbols: @#$%^&*()_+
+
+“Quotes” and ‘apostrophes’ should appear correctly.
+
+Lorem ipsum dolor sit amet, consectetur adipiscing elit. Donec vitae sapien ut libero venenatis faucibus.
