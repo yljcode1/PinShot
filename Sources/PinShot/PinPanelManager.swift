@@ -111,6 +111,10 @@ final class PinPanelManager {
         panels.first(where: { $0.value.frame.contains(screenPoint) })?.key
     }
 
+    func frame(for id: UUID) -> CGRect? {
+        panels[id]?.frame
+    }
+
     private func updatePanel(
         _ panel: NSPanel,
         with item: CaptureItem,

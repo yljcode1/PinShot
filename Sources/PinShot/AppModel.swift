@@ -27,6 +27,7 @@ final class AppModel {
     private let ocrService = OCRService()
     private let hotKeyService = HotKeyService()
     private let panelManager = PinPanelManager()
+    private let actionChooserService = CaptureActionChooserService()
     private var hotKeyMonitor: Any?
     private var magnifyMonitor: Any?
 
@@ -38,37 +39,64 @@ final class AppModel {
     func start() {
         hotKeyService.register(configuration: hotKeyConfiguration, handler: { [weak self] in
             Task { @MainActor [weak self] in
-                await self?.captureAndPin()
+                await self?.captureAndChooseAction()
             }
         })
         installMagnifyMonitorIfNeeded()
     }
 
-    func captureAndPin() async {
-        statusMessage = "Drag to select, or press Space for Window mode, then choose Quick Edit, Pin, or Copy"
+    func captureAndChooseAction() async {
+        statusMessage = "Use the system selection to capture an area"
 
         do {
-            guard let result = try await screenshotService.captureUserSelection() else {
+            guard let capture = try await screenshotService.captureUserSelection() else {
                 statusMessage = "Capture cancelled"
                 return
             }
 
-            handleSelectionResult(result)
+            let item = stageSelectionAsPin(capture)
+            statusMessage = "Capture pinned; choose Quick Edit, Pin, or Copy"
+
+            await Task.yield()
+
+            guard let action = await actionChooserService.chooseAction(
+                near: chooserAnchorPoint(for: item, fallbackRect: capture.appKitRect)
+            ) else {
+                statusMessage = "Capture pinned"
+                return
+            }
+
+            handlePresentedSelectionAction(action, for: item)
+        } catch {
+            statusMessage = "Capture failed: \(error.localizedDescription)"
+        }
+    }
+
+    func captureAndPin() async {
+        statusMessage = "Use the system selection to capture an area"
+
+        do {
+            guard let capture = try await screenshotService.captureUserSelection() else {
+                statusMessage = "Capture cancelled"
+                return
+            }
+
+            pinSelection(capture)
         } catch {
             statusMessage = "Capture failed: \(error.localizedDescription)"
         }
     }
 
     func captureAndCopy() async {
-        statusMessage = "Drag to select, or press Space for Window mode, then choose Quick Edit, Pin, or Copy"
+        statusMessage = "Use the system selection to capture an area"
 
         do {
-            guard let result = try await screenshotService.captureUserSelection() else {
+            guard let capture = try await screenshotService.captureUserSelection() else {
                 statusMessage = "Copy cancelled"
                 return
             }
 
-            handleSelectionResult(result)
+            copySelection(capture)
         } catch {
             statusMessage = "Copy failed: \(error.localizedDescription)"
         }
@@ -274,7 +302,7 @@ final class AppModel {
         saveHotKeyConfiguration(configuration)
         hotKeyService.register(configuration: configuration, handler: { [weak self] in
             Task { @MainActor [weak self] in
-                await self?.captureAndPin()
+                await self?.captureAndChooseAction()
             }
         })
         stopHotKeyRecording()
@@ -404,36 +432,14 @@ final class AppModel {
         }
     }
 
-    private func handleSelectionResult(_ result: CapturedSelectionResult) {
-        switch result.action {
-        case .quickEdit:
-            quickEditSelection(result.capture)
-        case .pin:
-            pinSelection(result.capture)
-        case .copy:
-            copySelection(result.capture)
-        }
-    }
-
     private func pinSelection(_ capture: CapturedSelection) {
-        let item = makeCaptureItem(from: capture)
-        captures.insert(item, at: 0)
-        selectCapture(item)
-        panelManager.present(item: item, appModel: self)
-
+        _ = stageSelectionAsPin(capture)
         statusMessage = "Recognizing text and preparing annotations"
-        performOCR(for: item)
     }
 
     private func quickEditSelection(_ capture: CapturedSelection) {
-        let item = makeCaptureItem(from: capture)
-        item.showToolbar = true
-        captures.insert(item, at: 0)
-        selectCapture(item)
-        panelManager.present(item: item, appModel: self)
-
+        _ = stageSelectionAsPin(capture, showToolbar: true)
         statusMessage = "Quick edit opened; OCR is running"
-        performOCR(for: item)
     }
 
     private func makeCaptureItem(from capture: CapturedSelection) -> CaptureItem {
@@ -450,6 +456,50 @@ final class AppModel {
         statusMessage = didCopy
             ? "Selection copied to clipboard"
             : "Copy failed: could not write image to clipboard"
+    }
+
+    @discardableResult
+    private func stageSelectionAsPin(
+        _ capture: CapturedSelection,
+        showToolbar: Bool = false
+    ) -> CaptureItem {
+        let item = makeCaptureItem(from: capture)
+        item.showToolbar = showToolbar
+        captures.insert(item, at: 0)
+        selectCapture(item)
+        panelManager.present(item: item, appModel: self)
+        performOCR(for: item)
+        return item
+    }
+
+    private func handlePresentedSelectionAction(
+        _ action: SelectionOverlayAction,
+        for item: CaptureItem
+    ) {
+        selectCapture(item)
+
+        switch action {
+        case .quickEdit:
+            item.showToolbar = true
+            item.showInspector = false
+            panelManager.refresh(item: item, appModel: self)
+            statusMessage = "Quick edit opened; OCR is running"
+        case .pin:
+            item.showToolbar = false
+            item.showInspector = false
+            panelManager.refresh(item: item, appModel: self)
+            statusMessage = "Capture pinned"
+        case .copy:
+            copyImage(for: item)
+        }
+    }
+
+    private func chooserAnchorPoint(for item: CaptureItem, fallbackRect: CGRect) -> CGPoint {
+        if let panelFrame = panelManager.frame(for: item.id) {
+            return CGPoint(x: panelFrame.midX, y: panelFrame.minY)
+        }
+
+        return CGPoint(x: fallbackRect.midX, y: fallbackRect.minY)
     }
 
     @discardableResult

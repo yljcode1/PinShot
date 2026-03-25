@@ -8,11 +8,6 @@ struct CapturedSelection {
     let appKitRect: CGRect
 }
 
-struct CapturedSelectionResult {
-    let capture: CapturedSelection
-    let action: SelectionOverlayAction
-}
-
 enum ScreenshotError: LocalizedError {
     case captureFailed
     case imageLoadFailed
@@ -29,30 +24,59 @@ enum ScreenshotError: LocalizedError {
 
 @MainActor
 final class ScreenshotService {
-    private let selectionOverlayService = SelectionOverlayService()
+    func captureUserSelection() async throws -> CapturedSelection? {
+        try await captureUsingSystemSelection()
+    }
 
-    func captureUserSelection() async throws -> CapturedSelectionResult? {
-        guard let selectionResult = await selectionOverlayService.selectArea() else {
+    private func captureUsingSystemSelection() async throws -> CapturedSelection? {
+        let temporaryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PinShot-\(UUID().uuidString).png")
+        let selectionTracker = SelectionGeometryTracker()
+        let initialMouseLocation = NSEvent.mouseLocation
+        let initialScreen = NSScreen.screens.first(where: { $0.frame.contains(initialMouseLocation) }) ?? NSScreen.main
+
+        defer {
+            try? FileManager.default.removeItem(at: temporaryURL)
+        }
+
+        selectionTracker.start()
+        let terminationStatus = try await runSystemSelectionCapture(to: temporaryURL)
+        let trackedRect = selectionTracker.finish()
+
+        guard terminationStatus == 0,
+              FileManager.default.fileExists(atPath: temporaryURL.path) else {
             return nil
         }
-        let selection = selectionResult.selection
-        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
 
-        let cgImage: CGImage
-        switch selection.kind {
-        case .area:
-            cgImage = try await captureArea(selection.appKitRect, content: content)
-        case .window(let windowID):
-            cgImage = try await captureWindow(
-                windowID: windowID,
-                selectionRect: selection.appKitRect,
-                content: content
-            )
+        guard let image = NSImage(contentsOf: temporaryURL),
+              let cgImage = image.cgImage else {
+            throw ScreenshotError.imageLoadFailed
         }
 
-        let image = NSImage(cgImage: cgImage, size: selection.appKitRect.size)
-        let capture = CapturedSelection(image: image, cgImage: cgImage, appKitRect: selection.appKitRect)
-        return CapturedSelectionResult(capture: capture, action: selectionResult.action)
+        let resolvedRect = trackedRect ?? inferCaptureRect(
+            image: cgImage,
+            initialMouseLocation: initialMouseLocation,
+            screen: initialScreen
+        )
+        let sizedImage = NSImage(cgImage: cgImage, size: resolvedRect.size)
+        return CapturedSelection(image: sizedImage, cgImage: cgImage, appKitRect: resolvedRect)
+    }
+
+    private func runSystemSelectionCapture(to temporaryURL: URL) async throws -> Int32 {
+        try await withCheckedThrowingContinuation { continuation in
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+            process.arguments = ["-i", "-s", "-x", temporaryURL.path]
+            process.terminationHandler = { process in
+                continuation.resume(returning: process.terminationStatus)
+            }
+
+            do {
+                try process.run()
+            } catch {
+                continuation.resume(throwing: error)
+            }
+        }
     }
 
     private func captureArea(_ rect: CGRect, content: SCShareableContent) async throws -> CGImage {
@@ -119,39 +143,6 @@ final class ScreenshotService {
         throw ScreenshotError.imageLoadFailed
     }
 
-    private func captureWindow(
-        windowID: CGWindowID,
-        selectionRect: CGRect,
-        content: SCShareableContent
-    ) async throws -> CGImage {
-        guard let window = content.windows.first(where: { $0.windowID == windowID }) else {
-            return try await captureArea(selectionRect, content: content)
-        }
-
-        let scale = pointPixelScale(
-            for: window.frame,
-            displays: displaySegments(intersecting: window.frame, content: content)
-        )
-
-        let configuration = SCStreamConfiguration()
-        configuration.width = max(1, Int((window.frame.width * scale).rounded()))
-        configuration.height = max(1, Int((window.frame.height * scale).rounded()))
-        configuration.showsCursor = false
-        configuration.scalesToFit = false
-        configuration.ignoreShadowsSingleWindow = false
-
-        let filter = SCContentFilter(desktopIndependentWindow: window)
-
-        do {
-            return try await SCScreenshotManager.captureImage(
-                contentFilter: filter,
-                configuration: configuration
-            )
-        } catch {
-            return try await captureArea(selectionRect, content: content)
-        }
-    }
-
     private func displaySegments(intersecting rect: CGRect, content: SCShareableContent) -> [DisplaySegment] {
         content.displays.compactMap { display in
             let frame = screenFrame(for: display.displayID) ?? display.frame
@@ -191,6 +182,96 @@ final class ScreenshotService {
             .scale ?? 1
     }
 
+    private func inferCaptureRect(
+        image: CGImage,
+        initialMouseLocation: CGPoint,
+        screen: NSScreen?
+    ) -> CGRect {
+        let resolvedScreen = screen ?? NSScreen.main
+        let scale = max(resolvedScreen?.backingScaleFactor ?? 1, 1)
+        let size = CGSize(
+            width: CGFloat(image.width) / scale,
+            height: CGFloat(image.height) / scale
+        )
+
+        let layoutFrame = resolvedScreen?.visibleFrame
+            ?? CGRect(origin: .zero, size: size)
+        var origin = CGPoint(
+            x: initialMouseLocation.x - size.width / 2,
+            y: initialMouseLocation.y - size.height / 2
+        )
+
+        origin.x = min(max(origin.x, layoutFrame.minX), max(layoutFrame.maxX - size.width, layoutFrame.minX))
+        origin.y = min(max(origin.y, layoutFrame.minY), max(layoutFrame.maxY - size.height, layoutFrame.minY))
+
+        return CGRect(origin: origin, size: size)
+    }
+
+}
+
+@MainActor
+private final class SelectionGeometryTracker {
+    private var pollingTask: Task<Void, Never>?
+    private var dragStartPoint: CGPoint?
+    private var trackedRect: CGRect?
+    private var didFinishDrag = false
+
+    func start() {
+        finish()
+        didFinishDrag = false
+
+        pollingTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            while !Task.isCancelled {
+                sampleMouseState()
+                try? await Task.sleep(for: .milliseconds(8))
+            }
+        }
+    }
+
+    @discardableResult
+    func finish() -> CGRect? {
+        pollingTask?.cancel()
+        pollingTask = nil
+
+        defer {
+            dragStartPoint = nil
+            trackedRect = nil
+            didFinishDrag = false
+        }
+
+        return trackedRect?.standardized.nonEmpty
+    }
+
+    private func sampleMouseState() {
+        guard !didFinishDrag else { return }
+
+        let point = NSEvent.mouseLocation
+        let isLeftMouseDown = CGEventSource.buttonState(.combinedSessionState, button: .left)
+
+        if isLeftMouseDown {
+            if dragStartPoint == nil {
+                dragStartPoint = point
+                trackedRect = CGRect(origin: point, size: .zero)
+            }
+            updateTrackedRect(with: point)
+            return
+        }
+
+        guard dragStartPoint != nil else { return }
+        updateTrackedRect(with: point)
+        didFinishDrag = true
+    }
+
+    private func updateTrackedRect(with point: CGPoint) {
+        guard let dragStartPoint else { return }
+        trackedRect = CGRect(
+            x: min(dragStartPoint.x, point.x),
+            y: min(dragStartPoint.y, point.y),
+            width: abs(point.x - dragStartPoint.x),
+            height: abs(point.y - dragStartPoint.y)
+        )
+    }
 }
 
 private struct DisplaySegment {
@@ -202,5 +283,10 @@ private struct DisplaySegment {
 private extension CGRect {
     var area: CGFloat {
         width * height
+    }
+
+    var nonEmpty: CGRect? {
+        guard width > 1, height > 1 else { return nil }
+        return self
     }
 }
