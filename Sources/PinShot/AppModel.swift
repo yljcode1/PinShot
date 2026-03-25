@@ -45,7 +45,7 @@ final class AppModel {
     }
 
     func captureAndPin() async {
-        statusMessage = "Drag to select, then choose Quick Edit, Pin, or Copy"
+        statusMessage = "Drag to select, or press Space for Window mode, then choose Quick Edit, Pin, or Copy"
 
         do {
             guard let result = try await screenshotService.captureUserSelection() else {
@@ -60,7 +60,7 @@ final class AppModel {
     }
 
     func captureAndCopy() async {
-        statusMessage = "Drag to select, then choose Quick Edit, Pin, or Copy"
+        statusMessage = "Drag to select, or press Space for Window mode, then choose Quick Edit, Pin, or Copy"
 
         do {
             guard let result = try await screenshotService.captureUserSelection() else {

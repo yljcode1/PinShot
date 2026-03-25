@@ -36,33 +36,171 @@ final class ScreenshotService {
             return nil
         }
         let selection = selectionResult.selection
-
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-        guard let display = content.displays.first(where: { $0.displayID == selection.displayID }) else {
-            throw ScreenshotError.captureFailed
+
+        let cgImage: CGImage
+        switch selection.kind {
+        case .area:
+            cgImage = try await captureArea(selection.appKitRect, content: content)
+        case .window(let windowID):
+            cgImage = try await captureWindow(
+                windowID: windowID,
+                selectionRect: selection.appKitRect,
+                content: content
+            )
         }
-
-        let localRect = CGRect(
-            x: selection.appKitRect.minX - selection.screenFrame.minX,
-            y: selection.screenFrame.height - (selection.appKitRect.maxY - selection.screenFrame.minY),
-            width: selection.appKitRect.width,
-            height: selection.appKitRect.height
-        )
-
-        let filter = SCContentFilter(display: display, excludingApplications: [], exceptingWindows: [])
-        let configuration = SCStreamConfiguration()
-        configuration.sourceRect = localRect
-        configuration.width = Int(selection.appKitRect.width * selection.displayScale)
-        configuration.height = Int(selection.appKitRect.height * selection.displayScale)
-        configuration.showsCursor = false
-
-        let cgImage = try await SCScreenshotManager.captureImage(
-            contentFilter: filter,
-            configuration: configuration
-        )
 
         let image = NSImage(cgImage: cgImage, size: selection.appKitRect.size)
         let capture = CapturedSelection(image: image, cgImage: cgImage, appKitRect: selection.appKitRect)
         return CapturedSelectionResult(capture: capture, action: selectionResult.action)
+    }
+
+    private func captureArea(_ rect: CGRect, content: SCShareableContent) async throws -> CGImage {
+        let segments = displaySegments(intersecting: rect, content: content)
+        guard !segments.isEmpty else {
+            throw ScreenshotError.captureFailed
+        }
+
+        let outputScale = max(segments.map(\.scale).max() ?? 1, 1)
+        let outputWidth = max(Int((rect.width * outputScale).rounded()), 1)
+        let outputHeight = max(Int((rect.height * outputScale).rounded()), 1)
+
+        guard let context = CGContext(
+            data: nil,
+            width: outputWidth,
+            height: outputHeight,
+            bitsPerComponent: 8,
+            bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue
+        ) else {
+            throw ScreenshotError.imageLoadFailed
+        }
+
+        context.interpolationQuality = .high
+        context.clear(CGRect(x: 0, y: 0, width: outputWidth, height: outputHeight))
+
+        for segment in segments {
+            let intersection = segment.frame.intersection(rect)
+            guard intersection.width > 0, intersection.height > 0 else { continue }
+
+            let localRect = CGRect(
+                x: intersection.minX - segment.frame.minX,
+                y: segment.frame.height - (intersection.maxY - segment.frame.minY),
+                width: intersection.width,
+                height: intersection.height
+            )
+
+            let configuration = SCStreamConfiguration()
+            configuration.sourceRect = localRect
+            configuration.width = max(1, Int((intersection.width * segment.scale).rounded()))
+            configuration.height = max(1, Int((intersection.height * segment.scale).rounded()))
+            configuration.showsCursor = false
+            configuration.ignoreGlobalClipDisplay = true
+
+            let filter = SCContentFilter(display: segment.display, excludingApplications: [], exceptingWindows: [])
+            let image = try await SCScreenshotManager.captureImage(
+                contentFilter: filter,
+                configuration: configuration
+            )
+            let destinationRect = CGRect(
+                x: (intersection.minX - rect.minX) * outputScale,
+                y: (intersection.minY - rect.minY) * outputScale,
+                width: intersection.width * outputScale,
+                height: intersection.height * outputScale
+            )
+            context.draw(image, in: destinationRect)
+        }
+
+        if let image = context.makeImage() {
+            return image
+        }
+
+        throw ScreenshotError.imageLoadFailed
+    }
+
+    private func captureWindow(
+        windowID: CGWindowID,
+        selectionRect: CGRect,
+        content: SCShareableContent
+    ) async throws -> CGImage {
+        guard let window = content.windows.first(where: { $0.windowID == windowID }) else {
+            return try await captureArea(selectionRect, content: content)
+        }
+
+        let scale = pointPixelScale(
+            for: window.frame,
+            displays: displaySegments(intersecting: window.frame, content: content)
+        )
+
+        let configuration = SCStreamConfiguration()
+        configuration.width = max(1, Int((window.frame.width * scale).rounded()))
+        configuration.height = max(1, Int((window.frame.height * scale).rounded()))
+        configuration.showsCursor = false
+        configuration.scalesToFit = false
+        configuration.ignoreShadowsSingleWindow = false
+
+        let filter = SCContentFilter(desktopIndependentWindow: window)
+
+        do {
+            return try await SCScreenshotManager.captureImage(
+                contentFilter: filter,
+                configuration: configuration
+            )
+        } catch {
+            return try await captureArea(selectionRect, content: content)
+        }
+    }
+
+    private func displaySegments(intersecting rect: CGRect, content: SCShareableContent) -> [DisplaySegment] {
+        content.displays.compactMap { display in
+            let frame = screenFrame(for: display.displayID) ?? display.frame
+            let intersection = frame.intersection(rect)
+            guard intersection.width > 0, intersection.height > 0 else {
+                return nil
+            }
+            return DisplaySegment(
+                display: display,
+                frame: frame,
+                scale: max(pointPixelScale(for: display), 1)
+            )
+        }
+    }
+
+    private func screenFrame(for displayID: CGDirectDisplayID) -> CGRect? {
+        NSScreen.screens.first { screen in
+            (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value == displayID
+        }?.frame
+    }
+
+    private func pointPixelScale(for display: SCDisplay) -> CGFloat {
+        if let mode = CGDisplayCopyDisplayMode(display.displayID) {
+            return CGFloat(mode.pixelWidth) / max(CGFloat(display.width), 1)
+        }
+        if let screen = NSScreen.screens.first(where: {
+            ( $0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value == display.displayID
+        }) {
+            return screen.backingScaleFactor
+        }
+        return 1
+    }
+
+    private func pointPixelScale(for rect: CGRect, displays: [DisplaySegment]) -> CGFloat {
+        displays
+            .max(by: { $0.frame.intersection(rect).area < $1.frame.intersection(rect).area })?
+            .scale ?? 1
+    }
+
+}
+
+private struct DisplaySegment {
+    let display: SCDisplay
+    let frame: CGRect
+    let scale: CGFloat
+}
+
+private extension CGRect {
+    var area: CGFloat {
+        width * height
     }
 }

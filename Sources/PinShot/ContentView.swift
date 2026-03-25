@@ -202,7 +202,7 @@ private struct FooterSection: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Tips")
                 .font(.headline)
-            Text("After triggering the shortcut, drag to select, then Pin or Copy. Pins support trackpad pinch, drag, and annotation tools.")
+            Text("After triggering the shortcut, drag to capture, or press Space to switch into Window Mode. Pins support trackpad pinch, drag, OCR, and annotation tools.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
 
