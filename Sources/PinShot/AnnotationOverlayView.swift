@@ -30,12 +30,15 @@ struct AnnotationOverlayView: NSViewRepresentable {
             appModel.statusMessage = message
         }
         view.onMagnify = onMagnify
+        view.baseImageSize = item.originalRect.size
+        view.baseCGImage = item.cgImage
         return view
     }
 
     func updateNSView(_ nsView: AnnotationDrawingView, context: Context) {
         nsView.annotations = item.annotations
         nsView.baseImageSize = item.originalRect.size
+        nsView.baseCGImage = item.cgImage
         nsView.tool = item.annotationTool
         nsView.annotationColor = item.annotationColor
         nsView.lineWidth = item.annotationLineWidth
@@ -87,6 +90,7 @@ final class AnnotationDrawingView: NSView, NSTextFieldDelegate {
 
     var annotations: [ImageAnnotation] = []
     var baseImageSize: CGSize = .zero
+    var baseCGImage: CGImage?
     var tool: AnnotationTool = .none {
         didSet {
             resetDraft()
@@ -223,6 +227,8 @@ final class AnnotationDrawingView: NSView, NSTextFieldDelegate {
             draftRect = normalizedRect(from: start, to: point)
         case .arrow:
             draftArrow = (start, point)
+        case .mosaic:
+            draftRect = normalizedRect(from: start, to: point)
         case .text:
             break
         }
@@ -263,6 +269,11 @@ final class AnnotationDrawingView: NSView, NSTextFieldDelegate {
         case .arrow:
             annotation = hypot(point.x - start.x, point.y - start.y) > 0.01
                 ? ImageAnnotation(kind: .arrow(start: start, end: point), color: annotationColor, lineWidth: lineWidth)
+                : nil
+        case .mosaic:
+            let rect = normalizedRect(from: start, to: point)
+            annotation = rect.width > 0.01 && rect.height > 0.01
+                ? ImageAnnotation(kind: .mosaic(rect: rect), color: annotationColor, lineWidth: lineWidth)
                 : nil
         case .text:
             annotation = nil
@@ -367,6 +378,9 @@ final class AnnotationDrawingView: NSView, NSTextFieldDelegate {
         case .arrow:
             guard let draftArrow else { return nil }
             return ImageAnnotation(kind: .arrow(start: draftArrow.0, end: draftArrow.1), color: annotationColor, lineWidth: lineWidth)
+        case .mosaic:
+            guard let draftRect else { return nil }
+            return ImageAnnotation(kind: .mosaic(rect: draftRect), color: annotationColor, lineWidth: lineWidth)
         case .text:
             return nil
         }
@@ -543,6 +557,25 @@ final class AnnotationDrawingView: NSView, NSTextFieldDelegate {
             context.addLine(to: endPoint)
             addArrowHead(to: context, start: startPoint, end: endPoint, lineWidth: annotation.lineWidth)
             context.strokePath()
+
+        case .mosaic(let rect):
+            let frame = denormalizedRect(rect, in: bounds)
+            var drewMosaic = false
+            if let baseCGImage,
+               let mosaicImage = MosaicRenderer.makeImage(baseCGImage: baseCGImage, normalizedRect: rect) {
+                context.saveGState()
+                context.interpolationQuality = .none
+                context.draw(mosaicImage, in: frame)
+                context.restoreGState()
+                drewMosaic = true
+            }
+            if !drewMosaic {
+                context.setFillColor(NSColor.black.withAlphaComponent(0.25).cgColor)
+                context.fill(frame)
+            }
+            context.setStrokeColor(NSColor.white.withAlphaComponent(0.9).cgColor)
+            context.setLineWidth(1.2)
+            context.stroke(frame)
 
         case .text(let content, let origin):
             let point = denormalizedPoint(origin, in: bounds)

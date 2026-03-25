@@ -48,24 +48,29 @@ final class AppModel {
         statusMessage = "拖拽选择区域，松手后点击钉住"
 
         do {
-            guard let capture = try await screenshotService.captureUserSelection() else {
+            guard let result = try await screenshotService.captureUserSelection() else {
                 statusMessage = "截图已取消"
                 return
             }
 
-            let item = CaptureItem(
-                image: capture.image,
-                cgImage: capture.cgImage,
-                originalRect: capture.appKitRect
-            )
-            captures.insert(item, at: 0)
-            selectCapture(item)
-            panelManager.present(item: item, appModel: self)
-
-            statusMessage = "正在识别文字并准备标注"
-            performOCR(for: item)
+            handleSelectionResult(result)
         } catch {
             statusMessage = "截图失败: \(error.localizedDescription)"
+        }
+    }
+
+    func captureAndCopy() async {
+        statusMessage = "Drag to select an area, then choose Copy"
+
+        do {
+            guard let result = try await screenshotService.captureUserSelection() else {
+                statusMessage = "Copy cancelled"
+                return
+            }
+
+            handleSelectionResult(result)
+        } catch {
+            statusMessage = "Copy failed: \(error.localizedDescription)"
         }
     }
 
@@ -195,6 +200,8 @@ final class AppModel {
             statusMessage = "矩形模式：拖拽绘制重点框"
         case .arrow:
             statusMessage = "箭头模式：拖拽指向重点内容"
+        case .mosaic:
+            statusMessage = "打码模式：框选区域即可自动马赛克"
         case .text:
             statusMessage = "文字模式：点击图片输入，或直接按 Command+V 粘贴文字"
         }
@@ -395,5 +402,35 @@ final class AppModel {
                 self.statusMessage = "截图完成，结果已置顶显示"
             }
         }
+    }
+
+    private func handleSelectionResult(_ result: CapturedSelectionResult) {
+        switch result.action {
+        case .pin:
+            pinSelection(result.capture)
+        case .copy:
+            copySelection(result.capture)
+        }
+    }
+
+    private func pinSelection(_ capture: CapturedSelection) {
+        let item = CaptureItem(
+            image: capture.image,
+            cgImage: capture.cgImage,
+            originalRect: capture.appKitRect
+        )
+        captures.insert(item, at: 0)
+        selectCapture(item)
+        panelManager.present(item: item, appModel: self)
+
+        statusMessage = "正在识别文字并准备标注"
+        performOCR(for: item)
+    }
+
+    private func copySelection(_ capture: CapturedSelection) {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.writeObjects([capture.image])
+        statusMessage = "Selection copied to clipboard"
     }
 }

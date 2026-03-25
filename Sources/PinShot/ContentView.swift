@@ -79,39 +79,55 @@ private struct MenuQuickActionsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("快速操作")
+            Text("Quick Actions")
                 .font(.headline)
 
-            HStack(spacing: 12) {
-                QuickActionButton(
-                    title: "开始截图",
-                    systemImage: "camera.viewfinder",
-                    tint: PinShotPalette.selectionBlue
-                ) {
-                    Task {
-                        await appModel.captureAndPin()
+            VStack(spacing: 12) {
+                HStack(spacing: 12) {
+                    QuickActionButton(
+                        title: "Pin Selection",
+                        systemImage: "pin",
+                        tint: PinShotPalette.selectionBlue
+                    ) {
+                        Task {
+                            await appModel.captureAndPin()
+                        }
                     }
+                    .help("Capture an area and pin it as a floating window")
+
+                    QuickActionButton(
+                        title: "Copy Selection",
+                        systemImage: "scissors",
+                        tint: .teal.opacity(0.9)
+                    ) {
+                        Task {
+                            await appModel.captureAndCopy()
+                        }
+                    }
+                    .help("Capture an area and copy it directly to the clipboard")
                 }
 
-                QuickActionButton(
-                    title: "最近贴图",
-                    systemImage: "rectangle.on.rectangle.angled",
-                    tint: .purple.opacity(0.85)
-                ) {
-                    appModel.reopenLatestCapture()
-                }
-                .disabled(!appModel.hasCaptures)
-                .help("把最近一张贴图重新显示到桌面上")
+                HStack(spacing: 12) {
+                    QuickActionButton(
+                        title: "Reopen Latest Pin",
+                        systemImage: "rectangle.on.rectangle.angled",
+                        tint: .purple.opacity(0.85)
+                    ) {
+                        appModel.reopenLatestCapture()
+                    }
+                    .disabled(!appModel.hasCaptures)
+                    .help("Show the most recent pin again")
 
-                QuickActionButton(
-                    title: "清空",
-                    systemImage: "trash",
-                    tint: .pink.opacity(0.85)
-                ) {
-                    appModel.closeAllPins()
+                    QuickActionButton(
+                        title: "Clear All Pins",
+                        systemImage: "trash",
+                        tint: .pink.opacity(0.85)
+                    ) {
+                        appModel.closeAllPins()
+                    }
+                    .disabled(!appModel.hasCaptures)
+                    .help("Close every pin and clear history")
                 }
-                .disabled(!appModel.hasCaptures)
-                .help("关闭桌面上所有贴图，并清空当前历史记录")
             }
         }
         .pinShotGlassCard()

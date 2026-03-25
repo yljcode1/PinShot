@@ -8,6 +8,11 @@ struct CapturedSelection {
     let appKitRect: CGRect
 }
 
+struct CapturedSelectionResult {
+    let capture: CapturedSelection
+    let action: SelectionOverlayAction
+}
+
 enum ScreenshotError: LocalizedError {
     case captureFailed
     case imageLoadFailed
@@ -26,10 +31,11 @@ enum ScreenshotError: LocalizedError {
 final class ScreenshotService {
     private let selectionOverlayService = SelectionOverlayService()
 
-    func captureUserSelection() async throws -> CapturedSelection? {
-        guard let selection = await selectionOverlayService.selectArea() else {
+    func captureUserSelection() async throws -> CapturedSelectionResult? {
+        guard let selectionResult = await selectionOverlayService.selectArea() else {
             return nil
         }
+        let selection = selectionResult.selection
 
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
         guard let display = content.displays.first(where: { $0.displayID == selection.displayID }) else {
@@ -56,6 +62,7 @@ final class ScreenshotService {
         )
 
         let image = NSImage(cgImage: cgImage, size: selection.appKitRect.size)
-        return CapturedSelection(image: image, cgImage: cgImage, appKitRect: selection.appKitRect)
+        let capture = CapturedSelection(image: image, cgImage: cgImage, appKitRect: selection.appKitRect)
+        return CapturedSelectionResult(capture: capture, action: selectionResult.action)
     }
 }

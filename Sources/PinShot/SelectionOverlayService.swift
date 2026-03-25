@@ -9,12 +9,22 @@ struct ScreenSelection {
     let screenFrame: CGRect
 }
 
+enum SelectionOverlayAction {
+    case pin
+    case copy
+}
+
+struct ScreenSelectionResult {
+    let selection: ScreenSelection
+    let action: SelectionOverlayAction
+}
+
 @MainActor
 final class SelectionOverlayService {
     private var windows: [NSWindow] = []
-    private var continuation: CheckedContinuation<ScreenSelection?, Never>?
+    private var continuation: CheckedContinuation<ScreenSelectionResult?, Never>?
 
-    func selectArea() async -> ScreenSelection? {
+    func selectArea() async -> ScreenSelectionResult? {
         cleanup()
 
         return await withCheckedContinuation { continuation in
@@ -42,8 +52,8 @@ final class SelectionOverlayService {
 
             let overlayView = SelectionOverlayView(frame: window.contentView?.bounds ?? .zero, screen: screen)
             overlayView.autoresizingMask = [.width, .height]
-            overlayView.onSelection = { [weak self] selection in
-                self?.finish(with: selection)
+            overlayView.onSelection = { [weak self] selection, action in
+                self?.finish(with: ScreenSelectionResult(selection: selection, action: action))
             }
             overlayView.onCancel = { [weak self] in
                 self?.finish(with: nil)
@@ -57,8 +67,8 @@ final class SelectionOverlayService {
         NSApp.activate(ignoringOtherApps: true)
     }
 
-    private func finish(with selection: ScreenSelection?) {
-        continuation?.resume(returning: selection)
+    private func finish(with result: ScreenSelectionResult?) {
+        continuation?.resume(returning: result)
         cleanup()
     }
 
@@ -72,7 +82,7 @@ final class SelectionOverlayService {
 }
 
 final class SelectionOverlayView: NSView {
-    var onSelection: ((ScreenSelection) -> Void)?
+    var onSelection: ((ScreenSelection, SelectionOverlayAction) -> Void)?
     var onCancel: (() -> Void)?
 
     private let screen: NSScreen
@@ -84,6 +94,7 @@ final class SelectionOverlayView: NSView {
     private let toolbarStackView = NSStackView()
     private let actionStackView = NSStackView()
     private let pinButton = NSButton(title: "Pin", target: nil, action: nil)
+    private let copyButton = NSButton(title: "Copy", target: nil, action: nil)
 
     init(frame frameRect: NSRect, screen: NSScreen) {
         self.screen = screen
@@ -214,10 +225,23 @@ final class SelectionOverlayView: NSView {
             toolTip: "Pin the selected area to the desktop (Return)"
         )
 
+        copyButton.target = self
+        copyButton.action = #selector(copyTapped)
+
+        configureActionButton(
+            copyButton,
+            title: "Copy",
+            symbolName: "doc.on.doc",
+            bezelColor: .controlAccentColor,
+            contentTintColor: .white,
+            toolTip: "Copy the selected area to the clipboard"
+        )
+
         actionStackView.orientation = .horizontal
         actionStackView.spacing = 8
         actionStackView.alignment = .centerY
         actionStackView.addArrangedSubview(pinButton)
+        actionStackView.addArrangedSubview(copyButton)
 
         toolbarStackView.orientation = .horizontal
         toolbarStackView.alignment = .centerX
@@ -269,10 +293,15 @@ final class SelectionOverlayView: NSView {
 
     @objc
     private func pinTapped() {
-        commitSelection()
+        commitSelection(action: .pin)
     }
 
-    private func commitSelection() {
+    @objc
+    private func copyTapped() {
+        commitSelection(action: .copy)
+    }
+
+    private func commitSelection(action: SelectionOverlayAction = .pin) {
         guard let rect = committedRect else { return }
 
         let globalRect = CGRect(
@@ -289,7 +318,8 @@ final class SelectionOverlayView: NSView {
             displayScale: screen.backingScaleFactor,
             screenFrame: screen.frame
         )
-        onSelection?(selection)
+        onSelection?(selection, action)
+        hideToolbar()
     }
 
     private func configureActionButton(

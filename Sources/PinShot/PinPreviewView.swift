@@ -148,6 +148,7 @@ struct PinPreviewView: View {
                 annotationToolButton(.selectText, label: "text.cursor")
                 annotationToolButton(.pen, label: "pencil.tip")
                 annotationToolButton(.rectangle, label: "rectangle")
+                annotationToolButton(.mosaic, label: "checkerboard.rectangle")
                 annotationToolButton(.arrow, label: "arrow.up.right")
                 annotationToolButton(.text, label: "character.textbox")
 
@@ -266,6 +267,8 @@ struct PinPreviewView: View {
             return "绘制矩形框，适合框重点"
         case .arrow:
             return "绘制箭头，指向重点内容"
+        case .mosaic:
+            return "框选一块区域并自动打码"
         case .text:
             return "添加文字标注；单击可选中和拖动，双击可编辑，也支持 ⌘V 直接粘贴文字"
         }

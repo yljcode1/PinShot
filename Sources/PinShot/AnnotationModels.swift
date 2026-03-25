@@ -7,6 +7,7 @@ enum AnnotationTool: String {
     case pen
     case rectangle
     case arrow
+    case mosaic
     case text
 
     var systemImage: String {
@@ -21,6 +22,8 @@ enum AnnotationTool: String {
             return "rectangle"
         case .arrow:
             return "arrow.up.right"
+        case .mosaic:
+            return "checkerboard.rectangle"
         case .text:
             return "character.textbox"
         }
@@ -50,6 +53,7 @@ struct ImageAnnotation: Identifiable, Equatable {
         case freehand(points: [CGPoint])
         case rectangle(CGRect)
         case arrow(start: CGPoint, end: CGPoint)
+        case mosaic(rect: CGRect)
         case text(content: String, origin: CGPoint)
     }
 
