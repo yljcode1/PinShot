@@ -2,6 +2,7 @@ import CoreGraphics
 import CoreImage
 import CoreImage.CIFilterBuiltins
 
+@MainActor
 enum MosaicRenderer {
     private static let ciContext = CIContext(options: nil)
 
