@@ -167,6 +167,10 @@ final class AppModel {
         refreshCaptures(applySelection(to: item))
     }
 
+    func activateCaptureForInteraction(_ item: CaptureItem) {
+        selectCapture(item)
+    }
+
     func isSelected(_ item: CaptureItem) -> Bool {
         selectedCaptureID == item.id
     }
@@ -339,6 +343,8 @@ final class AppModel {
     private func applySelection(to item: CaptureItem) -> [CaptureItem] {
         var changedCaptures: [CaptureItem] = []
 
+        panelManager.bringToFront(for: item.id)
+
         if selectedCaptureID != item.id {
             if let previouslySelectedCapture = capture(with: selectedCaptureID) {
                 changedCaptures.append(previouslySelectedCapture)
@@ -348,9 +354,10 @@ final class AppModel {
         }
 
         for capture in captures where capture.id != item.id {
-            if capture.showToolbar || capture.showInspector {
+            if capture.showToolbar || capture.showInspector || capture.annotationTool != .none {
                 capture.showToolbar = false
                 capture.showInspector = false
+                capture.annotationTool = .none
                 changedCaptures.append(capture)
             }
         }

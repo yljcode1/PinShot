@@ -6,6 +6,7 @@ import SwiftUI
 struct LiveTextSelectionOverlayView: NSViewRepresentable {
     let image: NSImage
     let isActive: Bool
+    let onActivate: () -> Void
     let onMagnify: (CGFloat) -> Void
 
     func makeCoordinator() -> Coordinator {
@@ -14,12 +15,14 @@ struct LiveTextSelectionOverlayView: NSViewRepresentable {
 
     func makeNSView(context: Context) -> LiveTextSelectableView {
         let view = LiveTextSelectableView()
+        view.onActivate = onActivate
         view.onMagnify = onMagnify
         view.update(image: image, isActive: isActive, coordinator: context.coordinator)
         return view
     }
 
     func updateNSView(_ nsView: LiveTextSelectableView, context: Context) {
+        nsView.onActivate = onActivate
         nsView.onMagnify = onMagnify
         nsView.update(image: image, isActive: isActive, coordinator: context.coordinator)
     }
@@ -37,6 +40,8 @@ struct LiveTextSelectionOverlayView: NSViewRepresentable {
 final class LiveTextSelectableView: NSView {
     private let imageView = NSImageView()
     private let overlayView = ImageAnalysisOverlayView()
+    private var localEventMonitor: Any?
+    var onActivate: (() -> Void)?
     var onMagnify: ((CGFloat) -> Void)?
 
     override var acceptsFirstResponder: Bool { true }
@@ -83,6 +88,11 @@ final class LiveTextSelectableView: NSView {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        if window == nil {
+            removeEventMonitor()
+        } else {
+            installEventMonitorIfNeeded()
+        }
         window?.makeFirstResponder(overlayView)
     }
 
@@ -130,6 +140,34 @@ final class LiveTextSelectableView: NSView {
                     self?.overlayView.analysis = nil
                 }
             }
+        }
+    }
+
+    private func installEventMonitorIfNeeded() {
+        guard localEventMonitor == nil else { return }
+
+        localEventMonitor = NSEvent.addLocalMonitorForEvents(
+            matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]
+        ) { [weak self] event in
+            guard let self,
+                  let window,
+                  event.window === window else {
+                return event
+            }
+
+            let point = convert(event.locationInWindow, from: nil)
+            if bounds.contains(point) {
+                onActivate?()
+            }
+
+            return event
+        }
+    }
+
+    private func removeEventMonitor() {
+        if let localEventMonitor {
+            NSEvent.removeMonitor(localEventMonitor)
+            self.localEventMonitor = nil
         }
     }
 }

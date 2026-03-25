@@ -8,6 +8,9 @@ struct AnnotationOverlayView: NSViewRepresentable {
 
     func makeNSView(context: Context) -> AnnotationDrawingView {
         let view = AnnotationDrawingView()
+        view.onActivate = {
+            appModel.activateCaptureForInteraction(item)
+        }
         view.onAppendAnnotation = { annotation in
             item.annotations.append(annotation)
             appModel.refreshCapture(item)
@@ -42,6 +45,9 @@ struct AnnotationOverlayView: NSViewRepresentable {
         nsView.tool = item.annotationTool
         nsView.annotationColor = item.annotationColor
         nsView.lineWidth = item.annotationLineWidth
+        nsView.onActivate = {
+            appModel.activateCaptureForInteraction(item)
+        }
         nsView.onAppendAnnotation = { annotation in
             item.annotations.append(annotation)
             appModel.refreshCapture(item)
@@ -118,6 +124,7 @@ final class AnnotationDrawingView: NSView, NSTextFieldDelegate {
     var onRequestTextTool: (() -> Void)?
     var onStatusMessage: ((String) -> Void)?
     var onMagnify: ((CGFloat) -> Void)?
+    var onActivate: (() -> Void)?
     var isCaptureSelected = false {
         didSet {
             ensureKeyboardFocusIfNeeded()
@@ -193,6 +200,7 @@ final class AnnotationDrawingView: NSView, NSTextFieldDelegate {
     }
 
     override func mouseDown(with event: NSEvent) {
+        onActivate?()
         ensureKeyboardFocusIfNeeded(force: true)
         let viewPoint = convert(event.locationInWindow, from: nil)
 
@@ -257,6 +265,16 @@ final class AnnotationDrawingView: NSView, NSTextFieldDelegate {
         }
 
         needsDisplay = true
+    }
+
+    override func rightMouseDown(with event: NSEvent) {
+        onActivate?()
+        super.rightMouseDown(with: event)
+    }
+
+    override func otherMouseDown(with event: NSEvent) {
+        onActivate?()
+        super.otherMouseDown(with: event)
     }
 
     override func mouseUp(with event: NSEvent) {

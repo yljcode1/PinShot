@@ -55,6 +55,12 @@ final class PinPanelManager {
         updatePanel(panel, with: item, appModel: appModel)
     }
 
+    func bringToFront(for id: UUID) {
+        guard let panel = panels[id] else { return }
+        panel.orderFrontRegardless()
+        panel.makeKey()
+    }
+
     func commitEditing(for id: UUID) {
         guard let panel = panels[id] else { return }
         panel.makeFirstResponder(nil)
