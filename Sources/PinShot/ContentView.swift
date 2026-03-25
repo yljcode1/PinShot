@@ -16,6 +16,8 @@ struct ContentView: View {
 
                 HotKeySection(appModel: appModel)
 
+                PreferencesSection(appModel: appModel)
+
                 HistorySection(appModel: appModel)
 
                 FooterSection(appModel: appModel)
@@ -195,6 +197,33 @@ private struct HistorySection: View {
     }
 }
 
+private struct PreferencesSection: View {
+    @Bindable var appModel: AppModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label("Preferences", systemImage: "gearshape")
+                .font(.headline)
+
+            Toggle(isOn: Binding(
+                get: { appModel.launchAtLoginEnabled },
+                set: { appModel.setLaunchAtLoginEnabled($0) }
+            )) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Launch at Login")
+                        .font(.subheadline.weight(.semibold))
+                    Text(appModel.launchAtLoginDetail)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .toggleStyle(.switch)
+            .help("Automatically start PinShot when you sign in")
+        }
+        .pinShotGlassCard()
+    }
+}
+
 private struct FooterSection: View {
     @Bindable var appModel: AppModel
 
@@ -313,10 +342,6 @@ private struct HistoryRow: View {
     }
 
     private var titleText: String {
-        let snippet = item.recognizedText.trimmingCharacters(in: .whitespacesAndNewlines)
-        if snippet.isEmpty || snippet == "No text recognized" {
-            return "Capture \(item.createdAt.formatted(date: .omitted, time: .shortened))"
-        }
-        return String(snippet.prefix(26))
+        CaptureHistoryFormatter.title(for: item.recognizedText, createdAt: item.createdAt)
     }
 }

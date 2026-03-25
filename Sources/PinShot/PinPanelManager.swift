@@ -137,29 +137,15 @@ final class PinPanelManager {
     private func preferredPanelSize(for item: CaptureItem, in panel: NSPanel? = nil) -> NSSize {
         let visibleFrame = screenForLayout(of: item, panel: panel)?.visibleFrame
             ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
-        let maxWidth: CGFloat = visibleFrame.width * 0.94
-        let maxHeight: CGFloat = visibleFrame.height * 0.94
-        let minWidth: CGFloat = 40
-        let minHeight: CGFloat = 40
-        let toolbarHeight: CGFloat = item.showToolbar ? 58 : 0
-        let inspectorHeight: CGFloat = item.showInspector ? 210 : 0
-        let inspectorSpacing: CGFloat = item.showInspector ? 12 : 0
-
-        let requestedWidth = item.originalRect.width * item.zoom
-        let requestedHeight = item.originalRect.height * item.zoom
-        let availableImageHeight = max(40, maxHeight - toolbarHeight - inspectorHeight - inspectorSpacing)
-
-        let widthRatio = maxWidth / max(requestedWidth, 1)
-        let heightRatio = availableImageHeight / max(requestedHeight, 1)
-        let fitScale = min(1, widthRatio, heightRatio)
-
-        let width = max(minWidth, requestedWidth * fitScale)
-        let height = max(
-            minHeight,
-            requestedHeight * fitScale + toolbarHeight + inspectorHeight + inspectorSpacing
+        let size = PinPanelLayout.preferredSize(
+            originalRect: item.originalRect,
+            zoom: item.zoom,
+            visibleFrame: visibleFrame,
+            showToolbar: item.showToolbar,
+            showInspector: item.showInspector
         )
 
-        return NSSize(width: width, height: height)
+        return NSSize(width: size.width, height: size.height)
     }
 
     private func screenForLayout(of item: CaptureItem, panel: NSPanel?) -> NSScreen? {

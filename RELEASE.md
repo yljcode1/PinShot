@@ -10,6 +10,7 @@
    - `rm -rf PinShot.app && mkdir -p PinShot.app/Contents/{MacOS,Resources}`
    - `install -m 755 .build/release/PinShot PinShot.app/Contents/MacOS/PinShot`
    - `cp Support/Info.plist PinShot.app/Contents/Info.plist`
+   - `PinShot.app/Contents/MacOS/PinShot --self-check`
    - Run `open PinShot.app` to verify hotkey, OCR, translation.
 
 3. **Create PR to master**

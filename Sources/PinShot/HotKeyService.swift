@@ -54,5 +54,9 @@ final class HotKeyService {
 
     deinit {
         unregister()
+        if let handlerRef {
+            RemoveEventHandler(handlerRef)
+            self.handlerRef = nil
+        }
     }
 }
