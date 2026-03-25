@@ -9,7 +9,7 @@
    - `swift build -c release --product PinShot`
    - `rm -rf PinShot.app && mkdir -p PinShot.app/Contents/{MacOS,Resources}`
    - `install -m 755 .build/release/PinShot PinShot.app/Contents/MacOS/PinShot`
-   - `cp <Info.plist template> PinShot.app/Contents/Info.plist`
+   - `cp Support/Info.plist PinShot.app/Contents/Info.plist`
    - Run `open PinShot.app` to verify hotkey, OCR, translation.
 
 3. **Create PR to master**
@@ -26,4 +26,4 @@
 5. **Post-release**
    - Announce build + share release link.
    - Update default download URLs if needed.
-   - Bump version numbers in `Package.swift`, `Info.plist`, and README (next dev cycle).
+   - Bump version numbers in `Support/Info.plist` and README (next dev cycle).

@@ -85,15 +85,15 @@ private struct MenuQuickActionsView: View {
             VStack(spacing: 12) {
                 HStack(spacing: 12) {
                     QuickActionButton(
-                        title: "Pin Selection",
-                        systemImage: "pin",
+                        title: "Capture Selection",
+                        systemImage: "camera.viewfinder",
                         tint: PinShotPalette.selectionBlue
                     ) {
                         Task {
-                            await appModel.captureAndPin()
+                            await appModel.captureAndChooseAction()
                         }
                     }
-                    .help("Capture an area and pin it as a floating window")
+                    .help("Capture an area, pin it first, then choose Quick Edit, Pin, or Copy")
 
                     QuickActionButton(
                         title: "Copy to Clipboard",
@@ -202,7 +202,7 @@ private struct FooterSection: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Tips")
                 .font(.headline)
-            Text("After triggering the shortcut, drag to capture. Pins support trackpad pinch, drag, OCR, and annotation tools.")
+            Text("After triggering the shortcut, use the system selection UI to capture, review the pinned preview, then choose Quick Edit, Pin, or Copy.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
 

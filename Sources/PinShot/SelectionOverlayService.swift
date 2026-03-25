@@ -1,10 +1,5 @@
 import AppKit
 import Carbon
-import CoreGraphics
-
-struct ScreenSelection {
-    let appKitRect: CGRect
-}
 
 enum SelectionOverlayAction {
     case quickEdit
@@ -12,108 +7,138 @@ enum SelectionOverlayAction {
     case copy
 }
 
-struct ScreenSelectionResult {
-    let selection: ScreenSelection
-    let action: SelectionOverlayAction
-}
-
 @MainActor
-final class SelectionOverlayService {
-    private var overlayWindows: [NSWindow] = []
-    private var continuation: CheckedContinuation<ScreenSelectionResult?, Never>?
+final class CaptureActionChooserService {
+    private var panel: CaptureActionChooserPanel?
+    private var continuation: CheckedContinuation<SelectionOverlayAction?, Never>?
+    private var localEventMonitor: Any?
+    private var globalMouseMonitor: Any?
 
-    func selectArea() async -> ScreenSelectionResult? {
+    func chooseAction(near anchorPoint: CGPoint) async -> SelectionOverlayAction? {
         cleanup()
 
         return await withCheckedContinuation { continuation in
             self.continuation = continuation
-            showOverlayWindows()
+            showPanel(near: anchorPoint)
         }
     }
 
-    private func showOverlayWindows() {
-        guard !NSScreen.screens.isEmpty else {
-            finish(with: nil)
-            return
+    private func showPanel(near anchorPoint: CGPoint) {
+        let panelSize = NSSize(width: 372, height: 74)
+        let screen = NSScreen.screens.first(where: { $0.frame.contains(anchorPoint) || $0.visibleFrame.contains(anchorPoint) })
+            ?? NSScreen.main
+        let visibleFrame = screen?.visibleFrame ?? CGRect(origin: .zero, size: panelSize)
+        let margin: CGFloat = 14
+
+        var origin = CGPoint(
+            x: anchorPoint.x - panelSize.width / 2,
+            y: anchorPoint.y - panelSize.height - 18
+        )
+
+        if origin.y < visibleFrame.minY + margin {
+            origin.y = anchorPoint.y + 18
         }
 
-        let mouseLocation = NSEvent.mouseLocation
-        var keyWindow: NSWindow?
+        origin.x = min(max(origin.x, visibleFrame.minX + margin), max(visibleFrame.maxX - panelSize.width - margin, visibleFrame.minX + margin))
+        origin.y = min(max(origin.y, visibleFrame.minY + margin), max(visibleFrame.maxY - panelSize.height - margin, visibleFrame.minY + margin))
 
-        for screen in NSScreen.screens {
-            let window = SelectionOverlayWindow(
-                contentRect: screen.frame,
-                styleMask: [.borderless],
-                backing: .buffered,
-                defer: false,
-                screen: screen
-            )
+        let panel = CaptureActionChooserPanel(
+            contentRect: NSRect(origin: origin, size: panelSize),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false,
+            screen: screen
+        )
 
-            window.backgroundColor = .clear
-            window.isOpaque = false
-            window.level = .screenSaver
-            window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-            window.ignoresMouseEvents = false
-            window.acceptsMouseMovedEvents = true
-            window.hasShadow = false
+        panel.level = .statusBar
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
+        panel.backgroundColor = .clear
+        panel.isOpaque = false
+        panel.hasShadow = false
+        panel.hidesOnDeactivate = false
 
-            let overlayView = SelectionOverlayView(frame: window.contentView?.bounds ?? .zero, screen: screen)
-            overlayView.autoresizingMask = [.width, .height]
-            overlayView.onSelection = { [weak self] selection, action in
-                self?.finish(with: ScreenSelectionResult(selection: selection, action: action))
-            }
-            overlayView.onCancel = { [weak self] in
+        let chooserView = CaptureActionChooserView(
+            frame: NSRect(origin: .zero, size: panelSize),
+            onAction: { [weak self] action in
+                self?.finish(with: action)
+            },
+            onCancel: { [weak self] in
                 self?.finish(with: nil)
             }
+        )
+        chooserView.autoresizingMask = [.width, .height]
 
-            window.contentView = overlayView
-            overlayWindows.append(window)
-            window.orderFrontRegardless()
+        panel.contentView = chooserView
+        self.panel = panel
 
-            if screen.frame.contains(mouseLocation) {
-                keyWindow = window
-            }
-        }
-
-        keyWindow?.makeKey()
+        panel.orderFrontRegardless()
+        panel.makeKey()
         NSApp.activate(ignoringOtherApps: true)
+        installEventMonitors()
     }
 
-    private func finish(with result: ScreenSelectionResult?) {
-        continuation?.resume(returning: result)
+    private func installEventMonitors() {
+        localEventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .keyDown]) { [weak self] event in
+            guard let self else { return event }
+
+            if event.type == .keyDown, event.keyCode == UInt16(kVK_Escape) {
+                finish(with: nil)
+                return nil
+            }
+
+            if (event.type == .leftMouseDown || event.type == .rightMouseDown),
+               event.window !== panel {
+                finish(with: nil)
+            }
+
+            return event
+        }
+
+        globalMouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
+            self?.finish(with: nil)
+        }
+    }
+
+    private func finish(with action: SelectionOverlayAction?) {
+        continuation?.resume(returning: action)
         cleanup()
     }
 
     private func cleanup() {
-        continuation = nil
-        for window in overlayWindows {
-            window.orderOut(nil)
+        if let localEventMonitor {
+            NSEvent.removeMonitor(localEventMonitor)
+            self.localEventMonitor = nil
         }
-        overlayWindows.removeAll()
+        if let globalMouseMonitor {
+            NSEvent.removeMonitor(globalMouseMonitor)
+            self.globalMouseMonitor = nil
+        }
+
+        continuation = nil
+        panel?.orderOut(nil)
+        panel = nil
     }
 }
 
-final class SelectionOverlayView: NSView {
-    var onSelection: ((ScreenSelection, SelectionOverlayAction) -> Void)?
-    var onCancel: (() -> Void)?
-
-    private let screen: NSScreen
-    private var startPoint: CGPoint?
-    private var currentPoint: CGPoint?
-    private var committedRect: CGRect?
-    private var isReselectGesture = false
-    private let toolbarContainer = NSVisualEffectView()
-    private let toolbarStackView = NSStackView()
-    private let actionStackView = NSStackView()
+private final class CaptureActionChooserView: NSView {
+    private let onAction: (SelectionOverlayAction) -> Void
+    private let onCancel: () -> Void
+    private let containerView = NSVisualEffectView()
+    private let stackView = NSStackView()
     private let quickEditButton = SelectionActionButton()
     private let pinButton = SelectionActionButton()
     private let copyButton = SelectionActionButton()
 
-    init(frame frameRect: NSRect, screen: NSScreen) {
-        self.screen = screen
+    init(
+        frame frameRect: NSRect,
+        onAction: @escaping (SelectionOverlayAction) -> Void,
+        onCancel: @escaping () -> Void
+    ) {
+        self.onAction = onAction
+        self.onCancel = onCancel
         super.init(frame: frameRect)
         wantsLayer = true
-        setupToolbar()
+        setupView()
     }
 
     @available(*, unavailable)
@@ -128,238 +153,112 @@ final class SelectionOverlayView: NSView {
         window?.makeFirstResponder(self)
     }
 
-    override func draw(_ dirtyRect: NSRect) {
-        NSColor.black.withAlphaComponent(0.20).setFill()
-        dirtyRect.fill()
-
-        if let rect = selectionRect {
-            NSColor.clear.setFill()
-            rect.fill(using: .clear)
-
-            let path = NSBezierPath(rect: rect)
-            NSColor.systemBlue.withAlphaComponent(0.95).setStroke()
-            path.lineWidth = 2
-            path.stroke()
-        }
-    }
-
-    override func mouseDown(with event: NSEvent) {
-        let point = convert(event.locationInWindow, from: nil)
-        if !toolbarContainer.isHidden, toolbarContainer.frame.contains(point) {
-            super.mouseDown(with: event)
-            return
-        }
-
-        isReselectGesture = committedRect != nil
-        hideToolbar()
-        committedRect = nil
-        startPoint = point
-        currentPoint = point
-        needsDisplay = true
-    }
-
-    override func mouseDragged(with event: NSEvent) {
-        currentPoint = convert(event.locationInWindow, from: nil)
-        needsDisplay = true
-    }
-
-    override func mouseUp(with event: NSEvent) {
-        currentPoint = convert(event.locationInWindow, from: nil)
-        needsDisplay = true
-
-        guard let rect = selectionRect, rect.width > 3, rect.height > 3 else {
-            if isReselectGesture {
-                onCancel?()
-            }
-            committedRect = nil
-            hideToolbar()
-            startPoint = nil
-            currentPoint = nil
-            isReselectGesture = false
-            return
-        }
-
-        committedRect = rect
-        startPoint = nil
-        currentPoint = nil
-        isReselectGesture = false
-        showToolbar(for: rect)
-    }
-
     override func keyDown(with event: NSEvent) {
         if event.keyCode == UInt16(kVK_Escape) {
-            onCancel?()
+            onCancel()
             return
         }
+
         if event.keyCode == UInt16(kVK_Return) || event.keyCode == UInt16(kVK_ANSI_KeypadEnter) {
-            commitSelection(action: .quickEdit)
+            onAction(.quickEdit)
             return
         }
+
         if event.modifierFlags.contains(.command),
            let characters = event.charactersIgnoringModifiers?.lowercased() {
             switch characters {
             case "c":
-                commitSelection(action: .copy)
+                onAction(.copy)
                 return
             case "p":
-                commitSelection(action: .pin)
+                onAction(.pin)
                 return
             default:
                 break
             }
         }
+
         if let characters = event.charactersIgnoringModifiers?.lowercased(), characters == "e" {
-            commitSelection(action: .quickEdit)
+            onAction(.quickEdit)
             return
         }
+
         super.keyDown(with: event)
     }
 
-    private var selectionRect: CGRect? {
-        if let committedRect {
-            return committedRect
-        }
-        guard let startPoint, let currentPoint else { return nil }
-        return CGRect(
-            x: min(startPoint.x, currentPoint.x),
-            y: min(startPoint.y, currentPoint.y),
-            width: abs(startPoint.x - currentPoint.x),
-            height: abs(startPoint.y - currentPoint.y)
-        )
-    }
+    private func setupView() {
+        containerView.material = .hudWindow
+        containerView.blendingMode = .withinWindow
+        containerView.state = .active
+        containerView.wantsLayer = true
+        containerView.layer?.cornerRadius = 16
+        containerView.layer?.cornerCurve = .continuous
+        containerView.layer?.borderWidth = 1
+        containerView.layer?.borderColor = NSColor.white.withAlphaComponent(0.22).cgColor
+        containerView.layer?.shadowColor = NSColor.black.withAlphaComponent(0.18).cgColor
+        containerView.layer?.shadowOpacity = 1
+        containerView.layer?.shadowRadius = 16
+        containerView.layer?.shadowOffset = CGSize(width: 0, height: -2)
+        containerView.translatesAutoresizingMaskIntoConstraints = false
 
-    private func setupToolbar() {
-        toolbarContainer.translatesAutoresizingMaskIntoConstraints = false
-        toolbarContainer.material = .popover
-        toolbarContainer.blendingMode = .withinWindow
-        toolbarContainer.state = .active
-        toolbarContainer.wantsLayer = true
-        toolbarContainer.layer?.cornerRadius = 14
-        toolbarContainer.layer?.cornerCurve = .continuous
-        toolbarContainer.layer?.borderWidth = 1
-        toolbarContainer.layer?.borderColor = NSColor.white.withAlphaComponent(0.22).cgColor
-        toolbarContainer.layer?.shadowColor = NSColor.black.withAlphaComponent(0.18).cgColor
-        toolbarContainer.layer?.shadowOpacity = 1
-        toolbarContainer.layer?.shadowRadius = 18
-        toolbarContainer.layer?.shadowOffset = CGSize(width: 0, height: -2)
-        toolbarContainer.isHidden = true
-
-        quickEditButton.target = self
-        quickEditButton.action = #selector(quickEditTapped)
+        stackView.orientation = .horizontal
+        stackView.spacing = 10
+        stackView.alignment = .centerY
+        stackView.edgeInsets = NSEdgeInsets(top: 12, left: 12, bottom: 12, right: 12)
+        stackView.translatesAutoresizingMaskIntoConstraints = false
 
         configureActionButton(
             quickEditButton,
             title: "Quick Edit",
             symbolName: "wand.and.stars",
             theme: .quickEdit,
-            toolTip: "Open the selection with toolbar, OCR, and annotation tools (Return / E)"
+            toolTip: "Open the capture with editing tools (Return / E)",
+            action: #selector(quickEditTapped)
         )
-
-        pinButton.target = self
-        pinButton.action = #selector(pinTapped)
 
         configureActionButton(
             pinButton,
             title: "Pin",
             symbolName: "pin.circle.fill",
             theme: .pin,
-            toolTip: "Pin the selected area to the desktop (Command+P)"
+            toolTip: "Pin the capture to the desktop (Command+P)",
+            action: #selector(pinTapped)
         )
-
-        copyButton.target = self
-        copyButton.action = #selector(copyTapped)
 
         configureActionButton(
             copyButton,
             title: "Copy",
             symbolName: "doc.on.doc.fill",
             theme: .copy,
-            toolTip: "Copy the selected area to the clipboard"
+            toolTip: "Copy the capture to the clipboard (Command+C)",
+            action: #selector(copyTapped)
         )
 
-        actionStackView.orientation = .horizontal
-        actionStackView.spacing = 8
-        actionStackView.alignment = .centerY
-        actionStackView.addArrangedSubview(quickEditButton)
-        actionStackView.addArrangedSubview(pinButton)
-        actionStackView.addArrangedSubview(copyButton)
+        stackView.addArrangedSubview(quickEditButton)
+        stackView.addArrangedSubview(pinButton)
+        stackView.addArrangedSubview(copyButton)
 
-        toolbarStackView.orientation = .horizontal
-        toolbarStackView.alignment = .centerX
-        toolbarStackView.spacing = 0
-        toolbarStackView.edgeInsets = NSEdgeInsets(top: 10, left: 12, bottom: 10, right: 12)
-        toolbarStackView.addArrangedSubview(actionStackView)
+        containerView.addSubview(stackView)
+        addSubview(containerView)
 
-        toolbarContainer.addSubview(toolbarStackView)
-        toolbarStackView.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
-            toolbarStackView.leadingAnchor.constraint(equalTo: toolbarContainer.leadingAnchor),
-            toolbarStackView.trailingAnchor.constraint(equalTo: toolbarContainer.trailingAnchor),
-            toolbarStackView.topAnchor.constraint(equalTo: toolbarContainer.topAnchor),
-            toolbarStackView.bottomAnchor.constraint(equalTo: toolbarContainer.bottomAnchor)
+            containerView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            containerView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            containerView.topAnchor.constraint(equalTo: topAnchor),
+            containerView.bottomAnchor.constraint(equalTo: bottomAnchor),
+
+            stackView.leadingAnchor.constraint(equalTo: containerView.leadingAnchor),
+            stackView.trailingAnchor.constraint(equalTo: containerView.trailingAnchor),
+            stackView.topAnchor.constraint(equalTo: containerView.topAnchor),
+            stackView.bottomAnchor.constraint(equalTo: containerView.bottomAnchor),
+
+            quickEditButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 108),
+            pinButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 96),
+            copyButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 96),
+            quickEditButton.heightAnchor.constraint(equalToConstant: 40),
+            pinButton.heightAnchor.constraint(equalToConstant: 40),
+            copyButton.heightAnchor.constraint(equalToConstant: 40)
         ])
-
-        addSubview(toolbarContainer)
-    }
-
-    private func showToolbar(for rect: CGRect) {
-        toolbarContainer.layoutSubtreeIfNeeded()
-        let fittingSize = toolbarContainer.fittingSize
-        let toolbarSize = NSSize(
-            width: max(96, fittingSize.width),
-            height: max(46, fittingSize.height)
-        )
-        let margin: CGFloat = 12
-        let x = min(
-            max(rect.midX - toolbarSize.width / 2, margin),
-            bounds.width - toolbarSize.width - margin
-        )
-
-        let belowY = rect.minY - toolbarSize.height - margin
-        let y: CGFloat
-        if belowY >= margin {
-            y = belowY
-        } else {
-            y = min(bounds.height - toolbarSize.height - margin, rect.maxY + margin)
-        }
-
-        toolbarContainer.frame = NSRect(origin: CGPoint(x: x, y: y), size: toolbarSize)
-        toolbarContainer.isHidden = false
-        needsDisplay = true
-    }
-
-    private func hideToolbar() {
-        toolbarContainer.isHidden = true
-    }
-
-    @objc
-    private func quickEditTapped() {
-        commitSelection(action: .quickEdit)
-    }
-
-    @objc
-    private func pinTapped() {
-        commitSelection(action: .pin)
-    }
-
-    @objc
-    private func copyTapped() {
-        commitSelection(action: .copy)
-    }
-
-    private func commitSelection(action: SelectionOverlayAction = .quickEdit) {
-        guard let rect = committedRect else { return }
-
-        let globalRect = CGRect(
-            x: screen.frame.minX + rect.minX,
-            y: screen.frame.minY + rect.minY,
-            width: rect.width,
-            height: rect.height
-        )
-
-        let selection = ScreenSelection(appKitRect: globalRect)
-        onSelection?(selection, action)
-        hideToolbar()
     }
 
     private func configureActionButton(
@@ -367,7 +266,8 @@ final class SelectionOverlayView: NSView {
         title: String,
         symbolName: String,
         theme: SelectionActionButtonTheme,
-        toolTip: String
+        toolTip: String,
+        action: Selector
     ) {
         let font = NSFont.systemFont(ofSize: 13, weight: .semibold)
         let symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 13, weight: .semibold)
@@ -385,11 +285,28 @@ final class SelectionOverlayView: NSView {
         button.imagePosition = .imageLeading
         button.imageScaling = .scaleProportionallyDown
         button.toolTip = toolTip
+        button.target = self
+        button.action = action
         button.configure(theme: theme)
+    }
+
+    @objc
+    private func quickEditTapped() {
+        onAction(.quickEdit)
+    }
+
+    @objc
+    private func pinTapped() {
+        onAction(.pin)
+    }
+
+    @objc
+    private func copyTapped() {
+        onAction(.copy)
     }
 }
 
-private final class SelectionOverlayWindow: NSWindow {
+private final class CaptureActionChooserPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
 }
