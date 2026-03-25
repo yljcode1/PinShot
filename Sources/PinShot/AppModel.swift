@@ -94,10 +94,10 @@ final class AppModel {
     func copyImage(for item: CaptureItem) {
         panelManager.commitEditing(for: item.id)
         let outputImage = AnnotationRenderer.render(item: item) ?? item.image
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        pasteboard.writeObjects([outputImage])
-        statusMessage = "Screenshot copied to clipboard"
+        let didCopy = copyImageToPasteboard(outputImage)
+        statusMessage = didCopy
+            ? "Screenshot copied to clipboard"
+            : "Copy failed: could not write image to clipboard"
     }
 
     func saveImage(for item: CaptureItem) {
@@ -428,9 +428,35 @@ final class AppModel {
     }
 
     private func copySelection(_ capture: CapturedSelection) {
+        let didCopy = copyImageToPasteboard(capture.image)
+        statusMessage = didCopy
+            ? "Selection copied to clipboard"
+            : "Copy failed: could not write image to clipboard"
+    }
+
+    @discardableResult
+    private func copyImageToPasteboard(_ image: NSImage) -> Bool {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
-        pasteboard.writeObjects([capture.image])
-        statusMessage = "Selection copied to clipboard"
+
+        var didWrite = false
+
+        if let pngData = image.pngData {
+            didWrite = pasteboard.setData(pngData, forType: .png) || didWrite
+        }
+
+        if let tiffData = image.tiffRepresentation {
+            didWrite = pasteboard.setData(tiffData, forType: .tiff) || didWrite
+        }
+
+        if !didWrite {
+            didWrite = pasteboard.writeObjects([image])
+        }
+
+        if !didWrite {
+            NSSound.beep()
+        }
+
+        return didWrite
     }
 }
