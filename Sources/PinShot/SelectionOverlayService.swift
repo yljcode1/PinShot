@@ -37,6 +37,9 @@ final class SelectionOverlayService {
             return
         }
 
+        let mouseLocation = NSEvent.mouseLocation
+        var keyWindow: NSWindow?
+
         for screen in NSScreen.screens {
             let window = SelectionOverlayWindow(
                 contentRect: screen.frame,
@@ -65,9 +68,14 @@ final class SelectionOverlayService {
 
             window.contentView = overlayView
             overlayWindows.append(window)
-            window.makeKeyAndOrderFront(nil)
+            window.orderFrontRegardless()
+
+            if screen.frame.contains(mouseLocation) {
+                keyWindow = window
+            }
         }
 
+        keyWindow?.makeKey()
         NSApp.activate(ignoringOtherApps: true)
     }
 

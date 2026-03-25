@@ -29,19 +29,47 @@ enum ScreenshotError: LocalizedError {
 
 @MainActor
 final class ScreenshotService {
-    private let selectionOverlayService = SelectionOverlayService()
-
-    func captureUserSelection() async throws -> CapturedSelectionResult? {
-        guard let selectionResult = await selectionOverlayService.selectArea() else {
+    func captureUserSelection(action: SelectionOverlayAction) async throws -> CapturedSelectionResult? {
+        guard let capture = try await captureUsingSystemSelection() else {
             return nil
         }
-        let selection = selectionResult.selection
-        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-        let cgImage = try await captureArea(selection.appKitRect, content: content)
+        return CapturedSelectionResult(capture: capture, action: action)
+    }
 
-        let image = NSImage(cgImage: cgImage, size: selection.appKitRect.size)
-        let capture = CapturedSelection(image: image, cgImage: cgImage, appKitRect: selection.appKitRect)
-        return CapturedSelectionResult(capture: capture, action: selectionResult.action)
+    private func captureUsingSystemSelection() async throws -> CapturedSelection? {
+        let temporaryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PinShot-\(UUID().uuidString).png")
+        let initialMouseLocation = NSEvent.mouseLocation
+        let initialScreen = NSScreen.screens.first(where: { $0.frame.contains(initialMouseLocation) }) ?? NSScreen.main
+
+        defer {
+            try? FileManager.default.removeItem(at: temporaryURL)
+        }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+        process.arguments = ["-i", "-s", "-x", temporaryURL.path]
+
+        try process.run()
+        process.waitUntilExit()
+
+        guard process.terminationStatus == 0,
+              FileManager.default.fileExists(atPath: temporaryURL.path) else {
+            return nil
+        }
+
+        guard let image = NSImage(contentsOf: temporaryURL),
+              let cgImage = image.cgImage else {
+            throw ScreenshotError.imageLoadFailed
+        }
+
+        let inferredRect = inferCaptureRect(
+            image: cgImage,
+            initialMouseLocation: initialMouseLocation,
+            screen: initialScreen
+        )
+        let sizedImage = NSImage(cgImage: cgImage, size: inferredRect.size)
+        return CapturedSelection(image: sizedImage, cgImage: cgImage, appKitRect: inferredRect)
     }
 
     private func captureArea(_ rect: CGRect, content: SCShareableContent) async throws -> CGImage {
@@ -145,6 +173,31 @@ final class ScreenshotService {
         displays
             .max(by: { $0.frame.intersection(rect).area < $1.frame.intersection(rect).area })?
             .scale ?? 1
+    }
+
+    private func inferCaptureRect(
+        image: CGImage,
+        initialMouseLocation: CGPoint,
+        screen: NSScreen?
+    ) -> CGRect {
+        let resolvedScreen = screen ?? NSScreen.main
+        let scale = max(resolvedScreen?.backingScaleFactor ?? 1, 1)
+        let size = CGSize(
+            width: CGFloat(image.width) / scale,
+            height: CGFloat(image.height) / scale
+        )
+
+        let layoutFrame = resolvedScreen?.visibleFrame
+            ?? CGRect(origin: .zero, size: size)
+        var origin = CGPoint(
+            x: initialMouseLocation.x - size.width / 2,
+            y: initialMouseLocation.y - size.height / 2
+        )
+
+        origin.x = min(max(origin.x, layoutFrame.minX), max(layoutFrame.maxX - size.width, layoutFrame.minX))
+        origin.y = min(max(origin.y, layoutFrame.minY), max(layoutFrame.maxY - size.height, layoutFrame.minY))
+
+        return CGRect(origin: origin, size: size)
     }
 
 }
