@@ -10,7 +10,7 @@ struct TranslationPlan {
 enum TranslationSupport {
     static func plan(for text: String) -> TranslationPlan? {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, trimmed != "No text recognized" else {
+        guard !trimmed.isEmpty, trimmed != CaptureText.noTextRecognized else {
             return nil
         }
 

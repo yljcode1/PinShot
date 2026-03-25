@@ -300,7 +300,7 @@ struct PinPreviewView: View {
                     beginTranslation()
                 }
                 .buttonStyle(.plain)
-                .disabled(item.isRecognizingText || item.recognizedText.isEmpty || item.recognizedText == "No text recognized")
+                .disabled(item.isRecognizingText || item.recognizedText.isEmpty || item.recognizedText == CaptureText.noTextRecognized)
                 .help("Translate recognized text to another language")
                 Button("Copy") {
                     appModel.copyRecognizedText(for: item)
@@ -318,7 +318,7 @@ struct PinPreviewView: View {
             }
 
             ScrollView {
-                Text(item.isRecognizingText ? "Recognizing text..." : (item.recognizedText.isEmpty ? "Recognition result will appear here" : item.recognizedText))
+                Text(item.isRecognizingText ? CaptureText.recognizing : (item.recognizedText.isEmpty ? "Recognition result will appear here" : item.recognizedText))
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .textSelection(.enabled)
             }

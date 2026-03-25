@@ -24,23 +24,15 @@ final class CaptureActionChooserService {
     }
 
     private func showPanel(near anchorPoint: CGPoint) {
-        let panelSize = NSSize(width: 372, height: 74)
+        let panelSize = NSSize(width: CaptureChooserLayout.panelSize.width, height: CaptureChooserLayout.panelSize.height)
         let screen = NSScreen.screens.first(where: { $0.frame.contains(anchorPoint) || $0.visibleFrame.contains(anchorPoint) })
             ?? NSScreen.main
         let visibleFrame = screen?.visibleFrame ?? CGRect(origin: .zero, size: panelSize)
-        let margin: CGFloat = 14
-
-        var origin = CGPoint(
-            x: anchorPoint.x - panelSize.width / 2,
-            y: anchorPoint.y - panelSize.height - 18
+        let origin = CaptureChooserLayout.origin(
+            anchorPoint: anchorPoint,
+            visibleFrame: visibleFrame,
+            panelSize: panelSize
         )
-
-        if origin.y < visibleFrame.minY + margin {
-            origin.y = anchorPoint.y + 18
-        }
-
-        origin.x = min(max(origin.x, visibleFrame.minX + margin), max(visibleFrame.maxX - panelSize.width - margin, visibleFrame.minX + margin))
-        origin.y = min(max(origin.y, visibleFrame.minY + margin), max(visibleFrame.maxY - panelSize.height - margin, visibleFrame.minY + margin))
 
         let panel = CaptureActionChooserPanel(
             contentRect: NSRect(origin: origin, size: panelSize),

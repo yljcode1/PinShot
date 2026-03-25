@@ -7,11 +7,12 @@ import UniformTypeIdentifiers
 @Observable
 final class AppModel {
     static let shared = AppModel()
-    private static let hotKeyDefaultsKey = "PinShot.hotKeyConfiguration"
 
     var captures: [CaptureItem] = []
     var selectedCaptureID: UUID?
     var hotKeyConfiguration = HotKeyConfiguration.default
+    var launchAtLoginEnabled = true
+    var launchAtLoginState = LaunchAtLoginState.unavailable
     var isRecordingHotKey = false
     var statusMessage = "Use the hotkey to start capturing"
 
@@ -23,83 +24,43 @@ final class AppModel {
         captures.first
     }
 
+    var launchAtLoginDetail: String {
+        launchAtLoginState.detailText
+    }
+
     private let screenshotService = ScreenshotService()
     private let ocrService = OCRService()
     private let hotKeyService = HotKeyService()
     private let panelManager = PinPanelManager()
     private let actionChooserService = CaptureActionChooserService()
+    private let preferences = AppPreferences()
+    private let launchAtLoginService = LaunchAtLoginService()
     private var hotKeyMonitor: Any?
     private var magnifyMonitor: Any?
 
     private init() {
-        hotKeyConfiguration = loadHotKeyConfiguration()
+        hotKeyConfiguration = preferences.loadHotKeyConfiguration()
+        launchAtLoginEnabled = preferences.launchAtLoginEnabled
+        launchAtLoginState = launchAtLoginService.currentState()
         statusMessage = "Use \(hotKeyConfiguration.display) to start a capture"
     }
 
     func start() {
-        hotKeyService.register(configuration: hotKeyConfiguration, handler: { [weak self] in
-            Task { @MainActor [weak self] in
-                await self?.captureAndChooseAction()
-            }
-        })
+        registerHotKeyHandler()
         installMagnifyMonitorIfNeeded()
+        applyLaunchAtLoginPreference(userInitiated: false)
     }
 
     func captureAndChooseAction() async {
-        statusMessage = "Use the system selection to capture an area"
-
-        do {
-            guard let capture = try await screenshotService.captureUserSelection() else {
-                statusMessage = "Capture cancelled"
-                return
-            }
-
-            let item = stageSelectionAsPin(capture)
-            statusMessage = "Capture pinned; choose Quick Edit, Pin, or Copy"
-
-            await Task.yield()
-
-            guard let action = await actionChooserService.chooseAction(
-                near: chooserAnchorPoint(for: item, fallbackRect: capture.appKitRect)
-            ) else {
-                statusMessage = "Capture pinned"
-                return
-            }
-
-            handlePresentedSelectionAction(action, for: item)
-        } catch {
-            statusMessage = "Capture failed: \(error.localizedDescription)"
-        }
+        await performCapture(mode: .chooseAction)
     }
 
     func captureAndPin() async {
-        statusMessage = "Use the system selection to capture an area"
-
-        do {
-            guard let capture = try await screenshotService.captureUserSelection() else {
-                statusMessage = "Capture cancelled"
-                return
-            }
-
-            pinSelection(capture)
-        } catch {
-            statusMessage = "Capture failed: \(error.localizedDescription)"
-        }
+        await performCapture(mode: .pin)
     }
 
     func captureAndCopy() async {
-        statusMessage = "Use the system selection to capture an area"
-
-        do {
-            guard let capture = try await screenshotService.captureUserSelection() else {
-                statusMessage = "Copy cancelled"
-                return
-            }
-
-            copySelection(capture)
-        } catch {
-            statusMessage = "Copy failed: \(error.localizedDescription)"
-        }
+        await performCapture(mode: .copy)
     }
 
     func reopenLatestCapture() {
@@ -292,6 +253,14 @@ final class AppModel {
         isRecordingHotKey = false
     }
 
+    func setLaunchAtLoginEnabled(_ enabled: Bool) {
+        guard launchAtLoginEnabled != enabled else { return }
+
+        launchAtLoginEnabled = enabled
+        preferences.launchAtLoginEnabled = enabled
+        applyLaunchAtLoginPreference(userInitiated: true)
+    }
+
     private func handleHotKeyRecording(_ event: NSEvent) {
         guard let configuration = HotKeyConfiguration.from(event: event) else {
             statusMessage = "Shortcut needs at least one modifier"
@@ -299,12 +268,8 @@ final class AppModel {
         }
 
         hotKeyConfiguration = configuration
-        saveHotKeyConfiguration(configuration)
-        hotKeyService.register(configuration: configuration, handler: { [weak self] in
-            Task { @MainActor [weak self] in
-                await self?.captureAndChooseAction()
-            }
-        })
+        preferences.saveHotKeyConfiguration(configuration)
+        registerHotKeyHandler()
         stopHotKeyRecording()
         statusMessage = "Shortcut updated to \(configuration.display)"
     }
@@ -366,19 +331,6 @@ final class AppModel {
         return nil
     }
 
-    private func loadHotKeyConfiguration() -> HotKeyConfiguration {
-        guard let data = UserDefaults.standard.data(forKey: Self.hotKeyDefaultsKey),
-              let configuration = try? JSONDecoder().decode(HotKeyConfiguration.self, from: data) else {
-            return .default
-        }
-        return configuration
-    }
-
-    private func saveHotKeyConfiguration(_ configuration: HotKeyConfiguration) {
-        guard let data = try? JSONEncoder().encode(configuration) else { return }
-        UserDefaults.standard.set(data, forKey: Self.hotKeyDefaultsKey)
-    }
-
     private func capture(with id: UUID?) -> CaptureItem? {
         guard let id else { return nil }
         return captures.first(where: { $0.id == id })
@@ -414,32 +366,18 @@ final class AppModel {
         }
     }
 
-    private func refreshAllCaptures() {
-        refreshCaptures(captures)
-    }
-
     private func performOCR(for item: CaptureItem) {
         let service = ocrService
         Task.detached(priority: .userInitiated) { [weak self] in
             let text = await service.recognizeText(cgImage: item.cgImage)
             await MainActor.run { [weak self] in
                 guard let self else { return }
-                let value = text.isEmpty ? "No text recognized" : text
+                let value = text.isEmpty ? CaptureText.noTextRecognized : text
                 item.recognizedText = value
                 item.isRecognizingText = false
                 self.statusMessage = "Capture ready"
             }
         }
-    }
-
-    private func pinSelection(_ capture: CapturedSelection) {
-        _ = stageSelectionAsPin(capture)
-        statusMessage = "Recognizing text and preparing annotations"
-    }
-
-    private func quickEditSelection(_ capture: CapturedSelection) {
-        _ = stageSelectionAsPin(capture, showToolbar: true)
-        statusMessage = "Quick edit opened; OCR is running"
     }
 
     private func makeCaptureItem(from capture: CapturedSelection) -> CaptureItem {
@@ -502,6 +440,73 @@ final class AppModel {
         return CGPoint(x: fallbackRect.midX, y: fallbackRect.minY)
     }
 
+    private func registerHotKeyHandler() {
+        hotKeyService.register(configuration: hotKeyConfiguration) { [weak self] in
+            Task { @MainActor [weak self] in
+                await self?.captureAndChooseAction()
+            }
+        }
+    }
+
+    private func applyLaunchAtLoginPreference(userInitiated: Bool) {
+        do {
+            launchAtLoginState = try launchAtLoginService.applyPreference(enabled: launchAtLoginEnabled)
+
+            guard userInitiated else { return }
+
+            switch launchAtLoginState {
+            case .enabled:
+                statusMessage = "Launch at login enabled"
+            case .disabled:
+                statusMessage = "Launch at login disabled"
+            case .requiresApproval:
+                statusMessage = "Allow PinShot in System Settings > General > Login Items"
+            case .unavailable:
+                statusMessage = "Launch at login will apply when running /Applications/PinShot.app"
+            }
+        } catch {
+            if userInitiated {
+                statusMessage = "Launch at login failed: \(error.localizedDescription)"
+            }
+            launchAtLoginState = launchAtLoginService.currentState()
+        }
+    }
+
+    private func performCapture(mode: CaptureMode) async {
+        statusMessage = mode.initialStatus
+
+        do {
+            guard let capture = try await screenshotService.captureUserSelection() else {
+                statusMessage = mode.cancelStatus
+                return
+            }
+
+            switch mode {
+            case .chooseAction:
+                let item = stageSelectionAsPin(capture)
+                statusMessage = "Capture pinned; choose Quick Edit, Pin, or Copy"
+
+                await Task.yield()
+
+                guard let action = await actionChooserService.chooseAction(
+                    near: chooserAnchorPoint(for: item, fallbackRect: capture.appKitRect)
+                ) else {
+                    statusMessage = "Capture pinned"
+                    return
+                }
+
+                handlePresentedSelectionAction(action, for: item)
+            case .pin:
+                _ = stageSelectionAsPin(capture)
+                statusMessage = "Recognizing text and preparing annotations"
+            case .copy:
+                copySelection(capture)
+            }
+        } catch {
+            statusMessage = "\(mode.failurePrefix) failed: \(error.localizedDescription)"
+        }
+    }
+
     @discardableResult
     private func copyImageToPasteboard(_ image: NSImage) -> Bool {
         let pasteboard = NSPasteboard.general
@@ -526,5 +531,33 @@ final class AppModel {
         }
 
         return didWrite
+    }
+}
+
+private enum CaptureMode {
+    case chooseAction
+    case pin
+    case copy
+
+    var initialStatus: String {
+        "Use the system selection to capture an area"
+    }
+
+    var cancelStatus: String {
+        switch self {
+        case .copy:
+            return "Copy cancelled"
+        case .chooseAction, .pin:
+            return "Capture cancelled"
+        }
+    }
+
+    var failurePrefix: String {
+        switch self {
+        case .copy:
+            return "Copy"
+        case .chooseAction, .pin:
+            return "Capture"
+        }
     }
 }
