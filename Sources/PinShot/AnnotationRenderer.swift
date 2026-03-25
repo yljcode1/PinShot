@@ -61,7 +61,7 @@ enum AnnotationRenderer {
         )
 
         for annotation in item.annotations {
-            draw(annotation: annotation, inCanvasSize: canvasSize)
+            draw(annotation: annotation, inCanvasSize: canvasSize, baseCGImage: item.cgImage)
         }
 
         context.flushGraphics()
@@ -82,7 +82,7 @@ enum AnnotationRenderer {
         return image.size
     }
 
-    private static func draw(annotation: ImageAnnotation, inCanvasSize size: CGSize) {
+    private static func draw(annotation: ImageAnnotation, inCanvasSize size: CGSize, baseCGImage: CGImage?) {
         let color = annotation.color.nsColor
         color.setStroke()
 
@@ -104,6 +104,21 @@ enum AnnotationRenderer {
             let path = NSBezierPath(rect: frame)
             path.lineWidth = annotation.lineWidth
             path.stroke()
+
+        case .mosaic(let rect):
+            let frame = canvasRect(rect, in: size)
+            if let baseCGImage,
+               let mosaicImage = MosaicRenderer.makeImage(baseCGImage: baseCGImage, normalizedRect: rect) {
+                let nsImage = NSImage(cgImage: mosaicImage, size: frame.size)
+                nsImage.draw(in: frame)
+            } else {
+                color.withAlphaComponent(0.25).setFill()
+                NSBezierPath(rect: frame).fill()
+            }
+            let border = NSBezierPath(rect: frame)
+            border.lineWidth = max(1, annotation.lineWidth / 2)
+            NSColor.white.withAlphaComponent(0.8).setStroke()
+            border.stroke()
 
         case .arrow(let start, let end):
             let startPoint = canvasPoint(start, in: size)

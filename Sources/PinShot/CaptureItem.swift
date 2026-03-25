@@ -28,7 +28,7 @@ final class CaptureItem: Identifiable {
         image: NSImage,
         cgImage: CGImage,
         originalRect: CGRect,
-        recognizedText: String = "正在识别文字...",
+        recognizedText: String = "Recognizing text...",
         opacity: Double = 0.96,
         zoom: Double = 1
     ) {

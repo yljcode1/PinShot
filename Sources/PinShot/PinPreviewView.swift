@@ -43,14 +43,14 @@ struct PinPreviewView: View {
                     item.translatedText = response.targetText
                     item.isTranslating = false
                     translationConfiguration = nil
-                    appModel.statusMessage = "翻译完成"
+                    appModel.statusMessage = "Translation complete"
                 }
             } catch {
                 await MainActor.run {
-                    item.translatedText = "翻译失败: \(error.localizedDescription)"
+                    item.translatedText = "Translation failed: \(error.localizedDescription)"
                     item.isTranslating = false
                     translationConfiguration = nil
-                    appModel.statusMessage = "翻译失败"
+                    appModel.statusMessage = "Translation failed"
                 }
             }
         }
@@ -142,12 +142,13 @@ struct PinPreviewView: View {
                 } label: {
                     Image(systemName: item.showInspector ? "text.bubble.fill" : "text.bubble")
                 }
-                .help(item.showInspector ? "收起文字面板" : "打开文字面板，查看 OCR 和翻译结果")
+                .help(item.showInspector ? "Hide the text panel" : "Open the text panel to view OCR and translation")
 
                 annotationToolButton(.none, label: "cursorarrow")
                 annotationToolButton(.selectText, label: "text.cursor")
                 annotationToolButton(.pen, label: "pencil.tip")
                 annotationToolButton(.rectangle, label: "rectangle")
+                annotationToolButton(.mosaic, label: "checkerboard.rectangle")
                 annotationToolButton(.arrow, label: "arrow.up.right")
                 annotationToolButton(.text, label: "character.textbox")
 
@@ -176,35 +177,35 @@ struct PinPreviewView: View {
                 } label: {
                     Image(systemName: "arrow.uturn.backward")
                 }
-                .help("撤销上一笔标注")
+                .help("Undo last annotation")
 
                 Button {
                     appModel.clearAnnotations(for: item)
                 } label: {
                     Image(systemName: "trash")
                 }
-                .help("清空这张贴图上的全部标注")
+                .help("Clear all annotations on this pin")
 
                 Button {
                     appModel.copyImage(for: item)
                 } label: {
                     Image(systemName: "doc.on.doc")
                 }
-                .help("复制当前贴图，包含你已经画上的标注")
+                .help("Copy this pin including annotations")
 
                 Button {
                     appModel.saveImage(for: item)
                 } label: {
                     Image(systemName: "square.and.arrow.down")
                 }
-                .help("保存当前贴图，包含你已经画上的标注")
+                .help("Save this pin including annotations")
 
                 Button {
                     appModel.removeCapture(item)
                 } label: {
                     Image(systemName: "xmark")
                 }
-                .help("关闭这张贴图")
+                .help("Close this pin")
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 8)
@@ -241,44 +242,46 @@ struct PinPreviewView: View {
 
     private func beginTranslation() {
         guard let plan = TranslationSupport.plan(for: item.recognizedText) else {
-            appModel.statusMessage = "没有可翻译的文字"
+            appModel.statusMessage = "No text to translate"
             return
         }
 
         item.showInspector = true
         item.isTranslating = true
-        item.translatedText = "正在翻译..."
+        item.translatedText = "Translating..."
         item.translationLabel = plan.label
         pendingTranslationText = item.recognizedText
         translationConfiguration = plan.configuration
-        appModel.statusMessage = "正在翻译..."
+        appModel.statusMessage = "Translating..."
     }
 
     private func annotationToolTooltip(for tool: AnnotationTool) -> String {
         switch tool {
         case .none:
-            return "回到普通模式，可以拖动贴图和手势缩放"
+            return "Normal mode: drag pins, pinch to zoom"
         case .selectText:
-            return "像微信一样直接选择图片里的文字，选中后可复制"
+            return "Select text in the image, then copy"
         case .pen:
-            return "自由画笔，直接在图片上涂画"
+            return "Freehand pen: draw directly on the pin"
         case .rectangle:
-            return "绘制矩形框，适合框重点"
+            return "Rectangle: draw boxes to highlight"
         case .arrow:
-            return "绘制箭头，指向重点内容"
+            return "Arrow: drag to point at content"
+        case .mosaic:
+            return "Mosaic: draw to blur, drag to move, drag handle to resize, Delete to remove"
         case .text:
-            return "添加文字标注；单击可选中和拖动，双击可编辑，也支持 ⌘V 直接粘贴文字"
+            return "Text: click to add, double-click to edit, ⌘V to paste"
         }
     }
 
     private func colorTooltip(for color: AnnotationColor) -> String {
         switch color {
         case .red:
-            return "切换标注颜色为红色"
+            return "Switch annotation color to red"
         case .blue:
-            return "切换标注颜色为蓝色"
+            return "Switch annotation color to blue"
         default:
-            return "切换标注颜色"
+            return "Switch annotation color"
         }
     }
 
@@ -286,24 +289,24 @@ struct PinPreviewView: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("文字面板")
+                    Text("Text Panel")
                         .font(.caption.weight(.bold))
-                    Text("先看识别原文，需要时再在这里翻译")
+                    Text("View OCR text here and translate if needed")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                Button(item.translatedText.isEmpty ? "翻译" : "重新翻译") {
+                Button(item.translatedText.isEmpty ? "Translate" : "Translate Again") {
                     beginTranslation()
                 }
                 .buttonStyle(.plain)
-                .disabled(item.isRecognizingText || item.recognizedText.isEmpty || item.recognizedText == "没有识别到文字")
-                .help("把识别到的文字翻译成另一种语言，结果也显示在这里")
-                Button("复制") {
+                .disabled(item.isRecognizingText || item.recognizedText.isEmpty || item.recognizedText == "No text recognized")
+                .help("Translate recognized text to another language")
+                Button("Copy") {
                     appModel.copyRecognizedText(for: item)
                 }
                 .buttonStyle(.plain)
-                .help("复制 OCR 识别出的原文")
+                .help("Copy recognized text")
                 Button {
                     dismissInspector()
                 } label: {
@@ -311,11 +314,11 @@ struct PinPreviewView: View {
                         .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
-                .help("关闭文字面板")
+                .help("Close the text panel")
             }
 
             ScrollView {
-                Text(item.isRecognizingText ? "正在识别文字..." : (item.recognizedText.isEmpty ? "识别结果会显示在这里" : item.recognizedText))
+                Text(item.isRecognizingText ? "Recognizing text..." : (item.recognizedText.isEmpty ? "Recognition result will appear here" : item.recognizedText))
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .textSelection(.enabled)
             }
@@ -325,7 +328,7 @@ struct PinPreviewView: View {
                 Divider()
 
                 HStack {
-                    Text(item.translationLabel.isEmpty ? "翻译结果" : item.translationLabel)
+                    Text(item.translationLabel.isEmpty ? "Translation" : item.translationLabel)
                         .font(.caption.weight(.bold))
                     Spacer()
                     if item.isTranslating {
@@ -335,7 +338,7 @@ struct PinPreviewView: View {
                 }
 
                 ScrollView {
-                    Text(item.translatedText)
+                    Text(item.translatedText.isEmpty ? "Translated text will appear here" : item.translatedText)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .textSelection(.enabled)
                 }
@@ -343,13 +346,13 @@ struct PinPreviewView: View {
             }
 
             HStack(spacing: 12) {
-                Text("透明度")
+                Text("Opacity")
                     .font(.caption.weight(.bold))
                 Slider(value: $item.opacity, in: 0.35...1.0)
                     .onChange(of: item.opacity) { _, _ in
                         appModel.updateOpacity(for: item)
                     }
-                    .help("调整贴图透明度，不影响复制和保存时的清晰度")
+                    .help("Adjust pin opacity (copy/save stays clear)")
                 Text("\(Int(item.opacity * 100))%")
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
@@ -357,6 +360,6 @@ struct PinPreviewView: View {
         }
         .pinShotGlassCard()
         .frame(maxWidth: .infinity)
-        .help("这里会显示识别和翻译结果；点贴图空白处可收起这个面板")
+        .help("View recognition and translation results; tap the pin to close")
     }
 }

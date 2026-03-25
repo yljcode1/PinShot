@@ -13,7 +13,7 @@ final class AppModel {
     var selectedCaptureID: UUID?
     var hotKeyConfiguration = HotKeyConfiguration.default
     var isRecordingHotKey = false
-    var statusMessage = "使用快捷键开始截图"
+    var statusMessage = "Use the hotkey to start capturing"
 
     var hasCaptures: Bool {
         !captures.isEmpty
@@ -32,7 +32,7 @@ final class AppModel {
 
     private init() {
         hotKeyConfiguration = loadHotKeyConfiguration()
-        statusMessage = "使用快捷键 \(hotKeyConfiguration.display) 开始截图"
+        statusMessage = "Use \(hotKeyConfiguration.display) to start a capture"
     }
 
     func start() {
@@ -45,27 +45,32 @@ final class AppModel {
     }
 
     func captureAndPin() async {
-        statusMessage = "拖拽选择区域，松手后点击钉住"
+        statusMessage = "Drag to select, or press Space for Window mode, then choose Quick Edit, Pin, or Copy"
 
         do {
-            guard let capture = try await screenshotService.captureUserSelection() else {
-                statusMessage = "截图已取消"
+            guard let result = try await screenshotService.captureUserSelection() else {
+                statusMessage = "Capture cancelled"
                 return
             }
 
-            let item = CaptureItem(
-                image: capture.image,
-                cgImage: capture.cgImage,
-                originalRect: capture.appKitRect
-            )
-            captures.insert(item, at: 0)
-            selectCapture(item)
-            panelManager.present(item: item, appModel: self)
-
-            statusMessage = "正在识别文字并准备标注"
-            performOCR(for: item)
+            handleSelectionResult(result)
         } catch {
-            statusMessage = "截图失败: \(error.localizedDescription)"
+            statusMessage = "Capture failed: \(error.localizedDescription)"
+        }
+    }
+
+    func captureAndCopy() async {
+        statusMessage = "Drag to select, or press Space for Window mode, then choose Quick Edit, Pin, or Copy"
+
+        do {
+            guard let result = try await screenshotService.captureUserSelection() else {
+                statusMessage = "Copy cancelled"
+                return
+            }
+
+            handleSelectionResult(result)
+        } catch {
+            statusMessage = "Copy failed: \(error.localizedDescription)"
         }
     }
 
@@ -76,30 +81,30 @@ final class AppModel {
 
     func copyRecognizedText(for item: CaptureItem) {
         guard !item.isRecognizingText else {
-            statusMessage = "正在识别文字，请稍等"
+            statusMessage = "Recognizing text..."
             return
         }
 
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setString(item.recognizedText, forType: .string)
-        statusMessage = "识别文字已复制"
+        statusMessage = "Recognized text copied"
     }
 
     func copyImage(for item: CaptureItem) {
         panelManager.commitEditing(for: item.id)
         let outputImage = AnnotationRenderer.render(item: item) ?? item.image
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        pasteboard.writeObjects([outputImage])
-        statusMessage = "截图已复制到剪贴板"
+        let didCopy = copyImageToPasteboard(outputImage)
+        statusMessage = didCopy
+            ? "Screenshot copied to clipboard"
+            : "Copy failed: could not write image to clipboard"
     }
 
     func saveImage(for item: CaptureItem) {
         panelManager.commitEditing(for: item.id)
 
         guard let pngData = AnnotationRenderer.pngData(item: item) else {
-            statusMessage = "保存失败：无法导出 PNG"
+            statusMessage = "Save failed: cannot export PNG"
             return
         }
 
@@ -110,9 +115,9 @@ final class AppModel {
         if panel.runModal() == .OK, let url = panel.url {
             do {
                 try pngData.write(to: url)
-                statusMessage = "图片已保存"
+                statusMessage = "Image saved"
             } catch {
-                statusMessage = "保存失败: \(error.localizedDescription)"
+                statusMessage = "Save failed: \(error.localizedDescription)"
             }
         }
     }
@@ -186,17 +191,19 @@ final class AppModel {
         }
         switch tool {
         case .none:
-            statusMessage = "普通模式：可拖动贴图或手势缩放"
+            statusMessage = "Normal: drag or pinch to zoom"
         case .selectText:
-            statusMessage = "选文字模式：拖拽选择图片里的文字，然后复制"
+            statusMessage = "Text selection: drag to select text and copy"
         case .pen:
-            statusMessage = "画笔模式：直接在图片上绘制"
+            statusMessage = "Pen: draw directly on the image"
         case .rectangle:
-            statusMessage = "矩形模式：拖拽绘制重点框"
+            statusMessage = "Rectangle: drag to highlight area"
         case .arrow:
-            statusMessage = "箭头模式：拖拽指向重点内容"
+            statusMessage = "Arrow: drag to point at content"
+        case .mosaic:
+            statusMessage = "Mosaic: draw to blur, drag to move, drag handle to resize, Delete to remove"
         case .text:
-            statusMessage = "文字模式：点击图片输入，或直接按 Command+V 粘贴文字"
+            statusMessage = "Text: click to type, or press Command+V to paste"
         }
         refreshCaptures(changedCaptures + [item])
     }
@@ -239,7 +246,7 @@ final class AppModel {
     func beginHotKeyRecording() {
         stopHotKeyRecording()
         isRecordingHotKey = true
-        statusMessage = "请在菜单栏窗口中按下新的快捷键"
+        statusMessage = "Press the new shortcut keys now"
 
         hotKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             Task { @MainActor [weak self] in
@@ -259,7 +266,7 @@ final class AppModel {
 
     private func handleHotKeyRecording(_ event: NSEvent) {
         guard let configuration = HotKeyConfiguration.from(event: event) else {
-            statusMessage = "快捷键至少需要一个修饰键"
+            statusMessage = "Shortcut needs at least one modifier"
             return
         }
 
@@ -271,7 +278,7 @@ final class AppModel {
             }
         })
         stopHotKeyRecording()
-        statusMessage = "快捷键已更新为 \(configuration.display)"
+        statusMessage = "Shortcut updated to \(configuration.display)"
     }
 
     private func installMagnifyMonitorIfNeeded() {
@@ -389,11 +396,85 @@ final class AppModel {
             let text = await service.recognizeText(cgImage: item.cgImage)
             await MainActor.run { [weak self] in
                 guard let self else { return }
-                let value = text.isEmpty ? "没有识别到文字" : text
+                let value = text.isEmpty ? "No text recognized" : text
                 item.recognizedText = value
                 item.isRecognizingText = false
-                self.statusMessage = "截图完成，结果已置顶显示"
+                self.statusMessage = "Capture ready"
             }
         }
+    }
+
+    private func handleSelectionResult(_ result: CapturedSelectionResult) {
+        switch result.action {
+        case .quickEdit:
+            quickEditSelection(result.capture)
+        case .pin:
+            pinSelection(result.capture)
+        case .copy:
+            copySelection(result.capture)
+        }
+    }
+
+    private func pinSelection(_ capture: CapturedSelection) {
+        let item = makeCaptureItem(from: capture)
+        captures.insert(item, at: 0)
+        selectCapture(item)
+        panelManager.present(item: item, appModel: self)
+
+        statusMessage = "Recognizing text and preparing annotations"
+        performOCR(for: item)
+    }
+
+    private func quickEditSelection(_ capture: CapturedSelection) {
+        let item = makeCaptureItem(from: capture)
+        item.showToolbar = true
+        captures.insert(item, at: 0)
+        selectCapture(item)
+        panelManager.present(item: item, appModel: self)
+
+        statusMessage = "Quick edit opened; OCR is running"
+        performOCR(for: item)
+    }
+
+    private func makeCaptureItem(from capture: CapturedSelection) -> CaptureItem {
+        let item = CaptureItem(
+            image: capture.image,
+            cgImage: capture.cgImage,
+            originalRect: capture.appKitRect
+        )
+        return item
+    }
+
+    private func copySelection(_ capture: CapturedSelection) {
+        let didCopy = copyImageToPasteboard(capture.image)
+        statusMessage = didCopy
+            ? "Selection copied to clipboard"
+            : "Copy failed: could not write image to clipboard"
+    }
+
+    @discardableResult
+    private func copyImageToPasteboard(_ image: NSImage) -> Bool {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+
+        var didWrite = false
+
+        if let pngData = image.pngData {
+            didWrite = pasteboard.setData(pngData, forType: .png) || didWrite
+        }
+
+        if let tiffData = image.tiffRepresentation {
+            didWrite = pasteboard.setData(tiffData, forType: .tiff) || didWrite
+        }
+
+        if !didWrite {
+            didWrite = pasteboard.writeObjects([image])
+        }
+
+        if !didWrite {
+            NSSound.beep()
+        }
+
+        return didWrite
     }
 }

@@ -10,7 +10,7 @@ struct TranslationPlan {
 enum TranslationSupport {
     static func plan(for text: String) -> TranslationPlan? {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, trimmed != "没有识别到文字" else {
+        guard !trimmed.isEmpty, trimmed != "No text recognized" else {
             return nil
         }
 
@@ -58,38 +58,38 @@ enum TranslationSupport {
     private static func languageLabel(for language: NLLanguage?) -> String {
         switch language {
         case .simplifiedChinese:
-            return "中文简体"
+            return "Chinese (Simplified)"
         case .traditionalChinese:
-            return "中文繁体"
+            return "Chinese (Traditional)"
         case .english:
-            return "英文"
+            return "English"
         case .japanese:
-            return "日文"
+            return "Japanese"
         case .korean:
-            return "韩文"
+            return "Korean"
         case .none:
-            return "自动识别"
+            return "Auto-detect"
         default:
-            return language?.rawValue ?? "自动识别"
+            return language?.rawValue ?? "Auto-detect"
         }
     }
 
     private static func languageLabel(for language: Locale.Language?) -> String {
         guard let identifier = language?.minimalIdentifier else {
-            return "自动"
+            return "Auto"
         }
 
         switch identifier {
         case "zh", "zh-Hans":
-            return "中文简体"
+            return "Chinese (Simplified)"
         case "zh-Hant":
-            return "中文繁体"
+            return "Chinese (Traditional)"
         case "en":
-            return "英文"
+            return "English"
         case "ja":
-            return "日文"
+            return "Japanese"
         case "ko":
-            return "韩文"
+            return "Korean"
         default:
             return identifier
         }

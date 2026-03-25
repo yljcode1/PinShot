@@ -64,7 +64,7 @@ private struct MenuHeaderView: View {
             }
 
             Label(
-                captureCount == 0 ? "使用快捷键或下方按钮开始截图" : "最近 \(captureCount) 张贴图可重新打开",
+                captureCount == 0 ? "Use the hotkey or buttons below to capture" : "Your latest \(captureCount) pins are ready to reopen",
                 systemImage: captureCount == 0 ? "sparkles" : "pin.fill"
             )
             .font(.footnote)
@@ -79,39 +79,55 @@ private struct MenuQuickActionsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("快速操作")
+            Text("Quick Actions")
                 .font(.headline)
 
-            HStack(spacing: 12) {
-                QuickActionButton(
-                    title: "开始截图",
-                    systemImage: "camera.viewfinder",
-                    tint: PinShotPalette.selectionBlue
-                ) {
-                    Task {
-                        await appModel.captureAndPin()
+            VStack(spacing: 12) {
+                HStack(spacing: 12) {
+                    QuickActionButton(
+                        title: "Pin Selection",
+                        systemImage: "pin",
+                        tint: PinShotPalette.selectionBlue
+                    ) {
+                        Task {
+                            await appModel.captureAndPin()
+                        }
                     }
+                    .help("Capture an area and pin it as a floating window")
+
+                    QuickActionButton(
+                        title: "Copy to Clipboard",
+                        systemImage: "scissors",
+                        tint: .teal.opacity(0.9)
+                    ) {
+                        Task {
+                            await appModel.captureAndCopy()
+                        }
+                    }
+                    .help("Capture an area and copy it directly to the clipboard")
                 }
 
-                QuickActionButton(
-                    title: "最近贴图",
-                    systemImage: "rectangle.on.rectangle.angled",
-                    tint: .purple.opacity(0.85)
-                ) {
-                    appModel.reopenLatestCapture()
-                }
-                .disabled(!appModel.hasCaptures)
-                .help("把最近一张贴图重新显示到桌面上")
+                HStack(spacing: 12) {
+                    QuickActionButton(
+                        title: "Reopen Latest Pin",
+                        systemImage: "rectangle.on.rectangle.angled",
+                        tint: .purple.opacity(0.85)
+                    ) {
+                        appModel.reopenLatestCapture()
+                    }
+                    .disabled(!appModel.hasCaptures)
+                    .help("Show the most recent pin again")
 
-                QuickActionButton(
-                    title: "清空",
-                    systemImage: "trash",
-                    tint: .pink.opacity(0.85)
-                ) {
-                    appModel.closeAllPins()
+                    QuickActionButton(
+                        title: "Clear All Pins",
+                        systemImage: "trash",
+                        tint: .pink.opacity(0.85)
+                    ) {
+                        appModel.closeAllPins()
+                    }
+                    .disabled(!appModel.hasCaptures)
+                    .help("Close every pin and clear history")
                 }
-                .disabled(!appModel.hasCaptures)
-                .help("关闭桌面上所有贴图，并清空当前历史记录")
             }
         }
         .pinShotGlassCard()
@@ -123,21 +139,21 @@ private struct HotKeySection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Label("全局快捷键", systemImage: "keyboard")
+            Label("Global Hotkey", systemImage: "keyboard")
                 .font(.headline)
 
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(appModel.isRecordingHotKey ? "等待新的组合..." : appModel.hotKeyConfiguration.display)
+                    Text(appModel.isRecordingHotKey ? "Waiting for new combo..." : appModel.hotKeyConfiguration.display)
                         .font(.title3.weight(.semibold))
-                    Text(appModel.isRecordingHotKey ? "请直接按下想要的组合键" : "可在任何界面使用该快捷键开始截图")
+                    Text(appModel.isRecordingHotKey ? "Press the keys you want" : "Use this shortcut anywhere to start a capture")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
 
                 Spacer()
 
-                Button(appModel.isRecordingHotKey ? "完成" : "更改") {
+                Button(appModel.isRecordingHotKey ? "Done" : "Change") {
                     if appModel.isRecordingHotKey {
                         appModel.stopHotKeyRecording()
                     } else {
@@ -145,7 +161,7 @@ private struct HotKeySection: View {
                     }
                 }
                 .buttonStyle(PinCapsuleButtonStyle(prominence: appModel.isRecordingHotKey ? .primary : .secondary))
-                .help(appModel.isRecordingHotKey ? "停止录制新的快捷键组合" : "点击后直接按下新的截图快捷键")
+                .help(appModel.isRecordingHotKey ? "Stop recording the new shortcut" : "Click, then press the new capture shortcut")
             }
         }
         .pinShotGlassCard()
@@ -157,7 +173,7 @@ private struct HistorySection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Label("历史贴图", systemImage: "clock")
+            Label("Pinned History", systemImage: "clock")
                 .font(.headline)
 
             if appModel.hasCaptures {
@@ -169,7 +185,7 @@ private struct HistorySection: View {
                     }
                 }
             } else {
-                Text("还没有截图记录，先来一张吧～")
+                Text("No captures yet — grab your first one.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -184,20 +200,20 @@ private struct FooterSection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("提示")
+            Text("Tips")
                 .font(.headline)
-            Text("快捷键后先框选，松手后点钉住；贴图支持触控板捏合、拖动和标注工具。")
+            Text("After triggering the shortcut, drag to capture, or press Space to switch into Window Mode. Pins support trackpad pinch, drag, OCR, and annotation tools.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
 
             Button {
                 NSApplication.shared.terminate(nil)
             } label: {
-                Label("退出 PinShot", systemImage: "power")
+                Label("Quit PinShot", systemImage: "power")
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(PinSidebarActionButtonStyle(isPrimary: true))
-            .help("退出 PinShot")
+            .help("Quit PinShot")
         }
         .pinShotGlassCard()
     }
@@ -298,8 +314,8 @@ private struct HistoryRow: View {
 
     private var titleText: String {
         let snippet = item.recognizedText.trimmingCharacters(in: .whitespacesAndNewlines)
-        if snippet.isEmpty || snippet == "没有识别到文字" {
-            return "截图 \(item.createdAt.formatted(date: .omitted, time: .shortened))"
+        if snippet.isEmpty || snippet == "No text recognized" {
+            return "Capture \(item.createdAt.formatted(date: .omitted, time: .shortened))"
         }
         return String(snippet.prefix(26))
     }

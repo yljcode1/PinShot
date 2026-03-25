@@ -30,12 +30,15 @@ struct AnnotationOverlayView: NSViewRepresentable {
             appModel.statusMessage = message
         }
         view.onMagnify = onMagnify
+        view.baseImageSize = item.originalRect.size
+        view.baseCGImage = item.cgImage
         return view
     }
 
     func updateNSView(_ nsView: AnnotationDrawingView, context: Context) {
         nsView.annotations = item.annotations
         nsView.baseImageSize = item.originalRect.size
+        nsView.baseCGImage = item.cgImage
         nsView.tool = item.annotationTool
         nsView.annotationColor = item.annotationColor
         nsView.lineWidth = item.annotationLineWidth
@@ -85,14 +88,24 @@ final class AnnotationDrawingView: NSView, NSTextFieldDelegate {
         case resizing
     }
 
+    private enum MosaicInteractionMode {
+        case none
+        case moving
+        case resizing
+    }
+
     var annotations: [ImageAnnotation] = []
     var baseImageSize: CGSize = .zero
+    var baseCGImage: CGImage?
     var tool: AnnotationTool = .none {
         didSet {
             resetDraft()
             if tool != .text {
                 finishTextEditing(commit: true)
                 clearTextSelection()
+            }
+            if tool != .mosaic {
+                clearMosaicSelection()
             }
             needsDisplay = true
         }
@@ -123,6 +136,7 @@ final class AnnotationDrawingView: NSView, NSTextFieldDelegate {
     private var activeTextColor: AnnotationColor = .red
     private var activeEditingAnnotationID: UUID?
     private var selectedTextAnnotationID: UUID?
+    private var selectedMosaicAnnotationID: UUID?
     private var suppressTextCreationOnNextClick = false
     private var isFinishingTextEditing = false
     private var isActivatingTextField = false
@@ -130,6 +144,9 @@ final class AnnotationDrawingView: NSView, NSTextFieldDelegate {
     private var textInteractionStartPoint: CGPoint?
     private var textInteractionStartViewPoint: CGPoint?
     private var textInteractionStartAnnotation: ImageAnnotation?
+    private var mosaicInteractionMode: MosaicInteractionMode = .none
+    private var mosaicInteractionStartViewPoint: CGPoint?
+    private var mosaicInteractionStartAnnotation: ImageAnnotation?
 
     override var isOpaque: Bool { false }
     override var acceptsFirstResponder: Bool { true }
@@ -184,6 +201,11 @@ final class AnnotationDrawingView: NSView, NSTextFieldDelegate {
             return
         }
 
+        if tool == .mosaic {
+            handleMosaicMouseDown(at: viewPoint)
+            return
+        }
+
         guard tool != .none else {
             super.mouseDown(with: event)
             return
@@ -205,6 +227,11 @@ final class AnnotationDrawingView: NSView, NSTextFieldDelegate {
             return
         }
 
+        if tool == .mosaic {
+            handleMosaicMouseDragged(at: viewPoint)
+            return
+        }
+
         guard tool != .none, let start = dragStartPoint else {
             super.mouseDragged(with: event)
             return
@@ -223,6 +250,8 @@ final class AnnotationDrawingView: NSView, NSTextFieldDelegate {
             draftRect = normalizedRect(from: start, to: point)
         case .arrow:
             draftArrow = (start, point)
+        case .mosaic:
+            draftRect = normalizedRect(from: start, to: point)
         case .text:
             break
         }
@@ -235,6 +264,11 @@ final class AnnotationDrawingView: NSView, NSTextFieldDelegate {
 
         if tool == .text {
             handleTextMouseUp(at: viewPoint)
+            return
+        }
+
+        if tool == .mosaic {
+            handleMosaicMouseUp(at: viewPoint)
             return
         }
 
@@ -264,6 +298,11 @@ final class AnnotationDrawingView: NSView, NSTextFieldDelegate {
             annotation = hypot(point.x - start.x, point.y - start.y) > 0.01
                 ? ImageAnnotation(kind: .arrow(start: start, end: point), color: annotationColor, lineWidth: lineWidth)
                 : nil
+        case .mosaic:
+            let rect = normalizedRect(from: start, to: point)
+            annotation = rect.width > 0.01 && rect.height > 0.01
+                ? ImageAnnotation(kind: .mosaic(rect: rect), color: annotationColor, lineWidth: lineWidth)
+                : nil
         case .text:
             annotation = nil
         }
@@ -289,7 +328,11 @@ final class AnnotationDrawingView: NSView, NSTextFieldDelegate {
         }
 
         if tool == .text, let selectedTextAnnotation {
-            drawSelection(for: selectedTextAnnotation, in: context)
+            drawTextSelection(for: selectedTextAnnotation, in: context)
+        }
+
+        if tool == .mosaic, let selectedMosaicAnnotation {
+            drawMosaicSelection(for: selectedMosaicAnnotation, in: context)
         }
 
         context.restoreGState()
@@ -329,10 +372,14 @@ final class AnnotationDrawingView: NSView, NSTextFieldDelegate {
     }
 
     fileprivate func syncSelectionState() {
-        guard let selectedTextAnnotationID else { return }
-        guard annotations.contains(where: { $0.id == selectedTextAnnotationID && $0.textContent != nil }) else {
+        if let selectedTextAnnotationID,
+           !annotations.contains(where: { $0.id == selectedTextAnnotationID && $0.textContent != nil }) {
             clearTextSelection()
-            return
+        }
+
+        if let selectedMosaicAnnotationID,
+           !annotations.contains(where: { $0.id == selectedMosaicAnnotationID && $0.mosaicRect != nil }) {
+            clearMosaicSelection()
         }
     }
 
@@ -367,6 +414,9 @@ final class AnnotationDrawingView: NSView, NSTextFieldDelegate {
         case .arrow:
             guard let draftArrow else { return nil }
             return ImageAnnotation(kind: .arrow(start: draftArrow.0, end: draftArrow.1), color: annotationColor, lineWidth: lineWidth)
+        case .mosaic:
+            guard let draftRect else { return nil }
+            return ImageAnnotation(kind: .mosaic(rect: draftRect), color: annotationColor, lineWidth: lineWidth)
         case .text:
             return nil
         }
@@ -375,6 +425,11 @@ final class AnnotationDrawingView: NSView, NSTextFieldDelegate {
     private var selectedTextAnnotation: ImageAnnotation? {
         guard let selectedTextAnnotationID else { return nil }
         return annotations.first(where: { $0.id == selectedTextAnnotationID })
+    }
+
+    private var selectedMosaicAnnotation: ImageAnnotation? {
+        guard let selectedMosaicAnnotationID else { return nil }
+        return annotations.first(where: { $0.id == selectedMosaicAnnotationID })
     }
 
     private func handleTextMouseDown(with event: NSEvent, at viewPoint: CGPoint) {
@@ -402,19 +457,19 @@ final class AnnotationDrawingView: NSView, NSTextFieldDelegate {
             selectedTextAnnotationID = annotation.id
             if event.clickCount >= 2 {
                 beginTextEditing(for: annotation)
-                onStatusMessage?("编辑文字：Enter 提交，Esc 取消")
+                onStatusMessage?("Editing text: Enter to commit, Esc to cancel")
                 needsDisplay = true
                 return
             }
             beginTextInteraction(.moving, annotation: annotation, at: viewPoint)
-            onStatusMessage?("文字已选中：拖动可移动，拖右下角可调大小，双击可编辑")
+            onStatusMessage?("Text selected: drag to move, drag bottom-right to resize, double-click to edit")
             needsDisplay = true
             return
         }
 
         selectedTextAnnotationID = nil
         beginTextEditing(at: normalizedPoint(viewPoint))
-        onStatusMessage?("输入文字：Enter 提交，Esc 取消")
+        onStatusMessage?("Enter text: Enter to commit, Esc to cancel")
         needsDisplay = true
     }
 
@@ -445,11 +500,99 @@ final class AnnotationDrawingView: NSView, NSTextFieldDelegate {
         needsDisplay = true
     }
 
+    private func handleMosaicMouseDown(at viewPoint: CGPoint) {
+        finishTextEditing(commit: true)
+        clearTextSelection()
+
+        if let selectedMosaicAnnotation,
+           let handleFrame = mosaicResizeHandleFrame(for: selectedMosaicAnnotation),
+           handleFrame.contains(viewPoint) {
+            beginMosaicInteraction(.resizing, annotation: selectedMosaicAnnotation, at: viewPoint)
+            onStatusMessage?("Mosaic selected: drag handle to resize, Delete to remove")
+            needsDisplay = true
+            return
+        }
+
+        if let annotation = mosaicAnnotation(at: viewPoint) {
+            selectedMosaicAnnotationID = annotation.id
+            beginMosaicInteraction(.moving, annotation: annotation, at: viewPoint)
+            onStatusMessage?("Mosaic selected: drag to move, drag handle to resize, Delete to remove")
+            needsDisplay = true
+            return
+        }
+
+        clearMosaicSelection()
+        let point = normalizedPoint(viewPoint)
+        dragStartPoint = point
+        draftPoints = [point]
+        draftRect = nil
+        draftArrow = nil
+        needsDisplay = true
+    }
+
+    private func handleMosaicMouseDragged(at viewPoint: CGPoint) {
+        switch mosaicInteractionMode {
+        case .moving:
+            updateMovingMosaic(to: viewPoint)
+        case .resizing:
+            updateResizingMosaic(to: viewPoint)
+        case .none:
+            guard let start = dragStartPoint else { return }
+            let point = normalizedPoint(viewPoint)
+            draftRect = normalizedRect(from: start, to: point)
+            needsDisplay = true
+        }
+    }
+
+    private func handleMosaicMouseUp(at viewPoint: CGPoint) {
+        switch mosaicInteractionMode {
+        case .moving:
+            commitMosaicInteractionIfNeeded()
+            resetMosaicInteraction()
+            needsDisplay = true
+            return
+        case .resizing:
+            commitMosaicInteractionIfNeeded()
+            resetMosaicInteraction()
+            needsDisplay = true
+            return
+        case .none:
+            break
+        }
+
+        guard let start = dragStartPoint else {
+            resetDraft()
+            needsDisplay = true
+            return
+        }
+
+        let point = normalizedPoint(viewPoint)
+        let rect = normalizedRect(from: start, to: point)
+        let annotation = rect.width > 0.01 && rect.height > 0.01
+            ? ImageAnnotation(kind: .mosaic(rect: rect), color: annotationColor, lineWidth: lineWidth)
+            : nil
+
+        if let annotation {
+            selectedMosaicAnnotationID = annotation.id
+            onAppendAnnotation?(annotation)
+            onStatusMessage?("Mosaic added: drag to move, drag handle to resize, Delete to remove")
+        }
+
+        resetDraft()
+        needsDisplay = true
+    }
+
     private func beginTextInteraction(_ mode: TextInteractionMode, annotation: ImageAnnotation?, at viewPoint: CGPoint) {
         textInteractionMode = mode
         textInteractionStartPoint = normalizedPoint(viewPoint)
         textInteractionStartViewPoint = viewPoint
         textInteractionStartAnnotation = annotation
+    }
+
+    private func beginMosaicInteraction(_ mode: MosaicInteractionMode, annotation: ImageAnnotation, at viewPoint: CGPoint) {
+        mosaicInteractionMode = mode
+        mosaicInteractionStartViewPoint = viewPoint
+        mosaicInteractionStartAnnotation = annotation
     }
 
     private func resetTextInteraction() {
@@ -459,8 +602,21 @@ final class AnnotationDrawingView: NSView, NSTextFieldDelegate {
         textInteractionStartAnnotation = nil
     }
 
+    private func resetMosaicInteraction() {
+        mosaicInteractionMode = .none
+        mosaicInteractionStartViewPoint = nil
+        mosaicInteractionStartAnnotation = nil
+    }
+
     private func commitTextInteractionIfNeeded() {
         guard let original = textInteractionStartAnnotation,
+              let current = annotations.first(where: { $0.id == original.id }) else { return }
+        guard current != original else { return }
+        onUpdateAnnotation?(current)
+    }
+
+    private func commitMosaicInteractionIfNeeded() {
+        guard let original = mosaicInteractionStartAnnotation,
               let current = annotations.first(where: { $0.id == original.id }) else { return }
         guard current != original else { return }
         onUpdateAnnotation?(current)
@@ -510,6 +666,49 @@ final class AnnotationDrawingView: NSView, NSTextFieldDelegate {
         needsDisplay = true
     }
 
+    private func updateMovingMosaic(to viewPoint: CGPoint) {
+        guard let startViewPoint = mosaicInteractionStartViewPoint,
+              let original = mosaicInteractionStartAnnotation,
+              let rect = original.mosaicRect else { return }
+
+        let originalFrame = denormalizedRect(rect, in: bounds)
+        let candidate = originalFrame.offsetBy(
+            dx: viewPoint.x - startViewPoint.x,
+            dy: viewPoint.y - startViewPoint.y
+        )
+        let clampedFrame = clampedMosaicFrame(candidate)
+
+        var updated = original
+        updated.kind = .mosaic(rect: normalizedRect(clampedFrame, in: bounds))
+        replaceLocal(annotation: updated)
+        selectedMosaicAnnotationID = updated.id
+        needsDisplay = true
+    }
+
+    private func updateResizingMosaic(to viewPoint: CGPoint) {
+        guard let original = mosaicInteractionStartAnnotation,
+              let rect = original.mosaicRect else { return }
+
+        let originalFrame = denormalizedRect(rect, in: bounds)
+        let minSize = max(TextEditorMetrics.handleSize, 18)
+        let clampedMaxX = min(max(originalFrame.minX + minSize, viewPoint.x), bounds.width)
+        let clampedMinY = min(max(0, viewPoint.y), originalFrame.maxY - minSize)
+
+        var updated = original
+        updated.kind = .mosaic(rect: normalizedRect(
+            CGRect(
+                x: originalFrame.minX,
+                y: clampedMinY,
+                width: clampedMaxX - originalFrame.minX,
+                height: originalFrame.maxY - clampedMinY
+            ),
+            in: bounds
+        ))
+        replaceLocal(annotation: updated)
+        selectedMosaicAnnotationID = updated.id
+        needsDisplay = true
+    }
+
     private func replaceLocal(annotation: ImageAnnotation) {
         guard let index = annotations.firstIndex(where: { $0.id == annotation.id }) else { return }
         annotations[index] = annotation
@@ -544,6 +743,25 @@ final class AnnotationDrawingView: NSView, NSTextFieldDelegate {
             addArrowHead(to: context, start: startPoint, end: endPoint, lineWidth: annotation.lineWidth)
             context.strokePath()
 
+        case .mosaic(let rect):
+            let frame = denormalizedRect(rect, in: bounds)
+            var drewMosaic = false
+            if let baseCGImage,
+               let mosaicImage = MosaicRenderer.makeImage(baseCGImage: baseCGImage, normalizedRect: rect) {
+                context.saveGState()
+                context.interpolationQuality = .none
+                context.draw(mosaicImage, in: frame)
+                context.restoreGState()
+                drewMosaic = true
+            }
+            if !drewMosaic {
+                context.setFillColor(NSColor.black.withAlphaComponent(0.25).cgColor)
+                context.fill(frame)
+            }
+            context.setStrokeColor(NSColor.white.withAlphaComponent(0.9).cgColor)
+            context.setLineWidth(1.2)
+            context.stroke(frame)
+
         case .text(let content, let origin):
             let point = denormalizedPoint(origin, in: bounds)
             let attributes: [NSAttributedString.Key: Any] = [
@@ -554,7 +772,7 @@ final class AnnotationDrawingView: NSView, NSTextFieldDelegate {
         }
     }
 
-    private func drawSelection(for annotation: ImageAnnotation, in context: CGContext) {
+    private func drawTextSelection(for annotation: ImageAnnotation, in context: CGContext) {
         guard let selectionFrame = textSelectionFrame(for: annotation) else { return }
 
         context.setFillColor(NSColor.systemBlue.withAlphaComponent(0.08).cgColor)
@@ -567,6 +785,24 @@ final class AnnotationDrawingView: NSView, NSTextFieldDelegate {
         context.strokePath()
 
         guard let handleFrame = textResizeHandleFrame(for: annotation) else { return }
+        context.setFillColor(NSColor.systemBlue.cgColor)
+        context.fillEllipse(in: handleFrame)
+        context.setStrokeColor(NSColor.white.cgColor)
+        context.setLineWidth(1)
+        context.strokeEllipse(in: handleFrame.insetBy(dx: 0.5, dy: 0.5))
+    }
+
+    private func drawMosaicSelection(for annotation: ImageAnnotation, in context: CGContext) {
+        guard let selectionFrame = mosaicSelectionFrame(for: annotation) else { return }
+
+        context.setFillColor(NSColor.systemBlue.withAlphaComponent(0.10).cgColor)
+        context.fill(selectionFrame)
+
+        context.setStrokeColor(NSColor.systemBlue.withAlphaComponent(0.95).cgColor)
+        context.setLineWidth(2)
+        context.stroke(selectionFrame.insetBy(dx: 1, dy: 1))
+
+        guard let handleFrame = mosaicResizeHandleFrame(for: annotation) else { return }
         context.setFillColor(NSColor.systemBlue.cgColor)
         context.fillEllipse(in: handleFrame)
         context.setStrokeColor(NSColor.white.cgColor)
@@ -620,6 +856,15 @@ final class AnnotationDrawingView: NSView, NSTextFieldDelegate {
         )
     }
 
+    private func normalizedRect(_ rect: CGRect, in bounds: CGRect) -> CGRect {
+        CGRect(
+            x: min(1, max(0, rect.minX / max(bounds.width, 1))),
+            y: min(1, max(0, rect.minY / max(bounds.height, 1))),
+            width: min(1, max(0, rect.width / max(bounds.width, 1))),
+            height: min(1, max(0, rect.height / max(bounds.height, 1)))
+        )
+    }
+
     private func resetDraft() {
         dragStartPoint = nil
         draftPoints.removeAll()
@@ -645,17 +890,25 @@ final class AnnotationDrawingView: NSView, NSTextFieldDelegate {
     }
 
     private func handleDeleteShortcut(_ event: NSEvent) -> Bool {
-        guard activeTextField == nil,
-              tool == .text,
-              let selectedTextAnnotationID,
-              isDeleteEvent(event) else {
+        guard activeTextField == nil, isDeleteEvent(event) else {
             return false
         }
 
-        onDeleteAnnotation?(selectedTextAnnotationID)
-        clearTextSelection()
-        onStatusMessage?("文字标注已删除")
-        return true
+        if tool == .text, let selectedTextAnnotationID {
+            onDeleteAnnotation?(selectedTextAnnotationID)
+            clearTextSelection()
+            onStatusMessage?("Text annotation deleted")
+            return true
+        }
+
+        if tool == .mosaic, let selectedMosaicAnnotationID {
+            onDeleteAnnotation?(selectedMosaicAnnotationID)
+            clearMosaicSelection()
+            onStatusMessage?("Mosaic deleted")
+            return true
+        }
+
+        return false
     }
 
     private func isDeleteEvent(_ event: NSEvent) -> Bool {
@@ -684,7 +937,7 @@ final class AnnotationDrawingView: NSView, NSTextFieldDelegate {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
-        onStatusMessage?("文字标注已复制")
+        onStatusMessage?("Text annotation copied")
         return true
     }
 
@@ -693,7 +946,7 @@ final class AnnotationDrawingView: NSView, NSTextFieldDelegate {
             .trimmingCharacters(in: .whitespacesAndNewlines),
             !pastedText.isEmpty else {
             NSSound.beep()
-            onStatusMessage?("剪贴板里没有可粘贴的文字")
+            onStatusMessage?("Clipboard has no text to paste")
             return true
         }
 
@@ -710,7 +963,7 @@ final class AnnotationDrawingView: NSView, NSTextFieldDelegate {
         )
         selectedTextAnnotationID = annotation.id
         onAppendAnnotation?(annotation)
-        onStatusMessage?("已把剪贴板文字贴到贴图上")
+        onStatusMessage?("Pasted clipboard text onto the pin")
         ensureKeyboardFocusIfNeeded(force: true)
         return true
     }
@@ -721,9 +974,22 @@ final class AnnotationDrawingView: NSView, NSTextFieldDelegate {
         needsDisplay = true
     }
 
+    private func clearMosaicSelection() {
+        selectedMosaicAnnotationID = nil
+        resetMosaicInteraction()
+        needsDisplay = true
+    }
+
     private func textAnnotation(at viewPoint: CGPoint) -> ImageAnnotation? {
         annotations.reversed().first { annotation in
             guard annotation.textContent != nil, let frame = textSelectionFrame(for: annotation) else { return false }
+            return frame.contains(viewPoint)
+        }
+    }
+
+    private func mosaicAnnotation(at viewPoint: CGPoint) -> ImageAnnotation? {
+        annotations.reversed().first { annotation in
+            guard let frame = mosaicSelectionFrame(for: annotation) else { return false }
             return frame.contains(viewPoint)
         }
     }
@@ -737,6 +1003,21 @@ final class AnnotationDrawingView: NSView, NSTextFieldDelegate {
 
     private func textResizeHandleFrame(for annotation: ImageAnnotation) -> CGRect? {
         guard let frame = textSelectionFrame(for: annotation) else { return nil }
+        return CGRect(
+            x: frame.maxX - TextEditorMetrics.handleSize * 0.5,
+            y: frame.minY - TextEditorMetrics.handleSize * 0.35,
+            width: TextEditorMetrics.handleSize,
+            height: TextEditorMetrics.handleSize
+        )
+    }
+
+    private func mosaicSelectionFrame(for annotation: ImageAnnotation) -> CGRect? {
+        guard let rect = annotation.mosaicRect else { return nil }
+        return denormalizedRect(rect, in: bounds)
+    }
+
+    private func mosaicResizeHandleFrame(for annotation: ImageAnnotation) -> CGRect? {
+        guard let frame = mosaicSelectionFrame(for: annotation) else { return nil }
         return CGRect(
             x: frame.maxX - TextEditorMetrics.handleSize * 0.5,
             y: frame.minY - TextEditorMetrics.handleSize * 0.35,
@@ -773,6 +1054,14 @@ final class AnnotationDrawingView: NSView, NSTextFieldDelegate {
         let pointer = convert(window.mouseLocationOutsideOfEventStream, from: nil)
         let candidate = bounds.contains(pointer) ? pointer : defaultPoint
         return clampedOrigin(for: content, fontSize: fontSize, candidate: candidate)
+    }
+
+    private func clampedMosaicFrame(_ rect: CGRect) -> CGRect {
+        let width = min(bounds.width, max(1, rect.width))
+        let height = min(bounds.height, max(1, rect.height))
+        let x = min(max(0, rect.minX), max(0, bounds.width - width))
+        let y = min(max(0, rect.minY), max(0, bounds.height - height))
+        return CGRect(x: x, y: y, width: width, height: height)
     }
 
     private func beginTextEditing(at point: CGPoint) {
@@ -819,7 +1108,7 @@ final class AnnotationDrawingView: NSView, NSTextFieldDelegate {
 
         let field = NSTextField(frame: textFieldFrame(for: normalizedOrigin))
         field.stringValue = content
-        field.placeholderString = "输入文本"
+        field.placeholderString = "Enter text"
         field.isBordered = false
         field.drawsBackground = true
         field.backgroundColor = NSColor.white.withAlphaComponent(0.94)
@@ -836,7 +1125,7 @@ final class AnnotationDrawingView: NSView, NSTextFieldDelegate {
         handle.onDrag = { [weak self] delta in
             self?.resizeActiveText(by: delta)
         }
-        handle.toolTip = "拖拽调整文本大小"
+        handle.toolTip = "Drag to resize text box"
 
         addSubview(field)
         addSubview(handle)
@@ -951,6 +1240,11 @@ private extension ImageAnnotation {
     var textOrigin: CGPoint? {
         guard case let .text(_, origin) = kind else { return nil }
         return origin
+    }
+
+    var mosaicRect: CGRect? {
+        guard case let .mosaic(rect) = kind else { return nil }
+        return rect
     }
 }
 
