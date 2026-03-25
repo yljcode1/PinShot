@@ -20,9 +20,9 @@ enum ScreenshotError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .captureFailed:
-            return "截图失败，请检查屏幕录制权限"
+            return "Screenshot failed, please check Screen Recording permission"
         case .imageLoadFailed:
-            return "截图文件读取失败"
+            return "Failed to load captured image"
         }
     }
 }

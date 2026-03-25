@@ -416,19 +416,19 @@ final class AnnotationDrawingView: NSView, NSTextFieldDelegate {
             selectedTextAnnotationID = annotation.id
             if event.clickCount >= 2 {
                 beginTextEditing(for: annotation)
-                onStatusMessage?("编辑文字：Enter 提交，Esc 取消")
+                onStatusMessage?("Editing text: Enter to commit, Esc to cancel")
                 needsDisplay = true
                 return
             }
             beginTextInteraction(.moving, annotation: annotation, at: viewPoint)
-            onStatusMessage?("文字已选中：拖动可移动，拖右下角可调大小，双击可编辑")
+            onStatusMessage?("Text selected: drag to move, drag bottom-right to resize, double-click to edit")
             needsDisplay = true
             return
         }
 
         selectedTextAnnotationID = nil
         beginTextEditing(at: normalizedPoint(viewPoint))
-        onStatusMessage?("输入文字：Enter 提交，Esc 取消")
+        onStatusMessage?("Enter text: Enter to commit, Esc to cancel")
         needsDisplay = true
     }
 
@@ -687,7 +687,7 @@ final class AnnotationDrawingView: NSView, NSTextFieldDelegate {
 
         onDeleteAnnotation?(selectedTextAnnotationID)
         clearTextSelection()
-        onStatusMessage?("文字标注已删除")
+        onStatusMessage?("Text annotation deleted")
         return true
     }
 
@@ -717,7 +717,7 @@ final class AnnotationDrawingView: NSView, NSTextFieldDelegate {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
-        onStatusMessage?("文字标注已复制")
+        onStatusMessage?("Text annotation copied")
         return true
     }
 
@@ -726,7 +726,7 @@ final class AnnotationDrawingView: NSView, NSTextFieldDelegate {
             .trimmingCharacters(in: .whitespacesAndNewlines),
             !pastedText.isEmpty else {
             NSSound.beep()
-            onStatusMessage?("剪贴板里没有可粘贴的文字")
+            onStatusMessage?("Clipboard has no text to paste")
             return true
         }
 
@@ -743,7 +743,7 @@ final class AnnotationDrawingView: NSView, NSTextFieldDelegate {
         )
         selectedTextAnnotationID = annotation.id
         onAppendAnnotation?(annotation)
-        onStatusMessage?("已把剪贴板文字贴到贴图上")
+        onStatusMessage?("Pasted clipboard text onto the pin")
         ensureKeyboardFocusIfNeeded(force: true)
         return true
     }
@@ -852,7 +852,7 @@ final class AnnotationDrawingView: NSView, NSTextFieldDelegate {
 
         let field = NSTextField(frame: textFieldFrame(for: normalizedOrigin))
         field.stringValue = content
-        field.placeholderString = "输入文本"
+        field.placeholderString = "Enter text"
         field.isBordered = false
         field.drawsBackground = true
         field.backgroundColor = NSColor.white.withAlphaComponent(0.94)
@@ -869,7 +869,7 @@ final class AnnotationDrawingView: NSView, NSTextFieldDelegate {
         handle.onDrag = { [weak self] delta in
             self?.resizeActiveText(by: delta)
         }
-        handle.toolTip = "拖拽调整文本大小"
+        handle.toolTip = "Drag to resize text box"
 
         addSubview(field)
         addSubview(handle)
