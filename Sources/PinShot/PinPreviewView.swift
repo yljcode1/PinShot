@@ -64,6 +64,9 @@ struct PinPreviewView: View {
                 LiveTextSelectionOverlayView(
                     image: item.image,
                     isActive: true,
+                    onActivate: {
+                        appModel.activateCaptureForInteraction(item)
+                    },
                     onMagnify: { magnification in
                         appModel.magnify(for: item, magnification: magnification)
                     }
