@@ -268,7 +268,7 @@ struct PinPreviewView: View {
         case .arrow:
             return "Arrow: drag to point at content"
         case .mosaic:
-            return "Mosaic: select an area to blur"
+            return "Mosaic: draw to blur, drag to move, drag handle to resize, Delete to remove"
         case .text:
             return "Text: click to add, double-click to edit, ⌘V to paste"
         }

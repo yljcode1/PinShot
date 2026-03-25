@@ -45,7 +45,7 @@ final class AppModel {
     }
 
     func captureAndPin() async {
-        statusMessage = "Drag to select, then choose Pin"
+        statusMessage = "Drag to select, then choose Quick Edit, Pin, or Copy"
 
         do {
             guard let result = try await screenshotService.captureUserSelection() else {
@@ -60,7 +60,7 @@ final class AppModel {
     }
 
     func captureAndCopy() async {
-        statusMessage = "Drag to select, then choose Copy"
+        statusMessage = "Drag to select, then choose Quick Edit, Pin, or Copy"
 
         do {
             guard let result = try await screenshotService.captureUserSelection() else {
@@ -201,7 +201,7 @@ final class AppModel {
         case .arrow:
             statusMessage = "Arrow: drag to point at content"
         case .mosaic:
-            statusMessage = "Mosaic: select an area to blur"
+            statusMessage = "Mosaic: draw to blur, drag to move, drag handle to resize, Delete to remove"
         case .text:
             statusMessage = "Text: click to type, or press Command+V to paste"
         }
@@ -399,13 +399,15 @@ final class AppModel {
                 let value = text.isEmpty ? "No text recognized" : text
                 item.recognizedText = value
                 item.isRecognizingText = false
-                self.statusMessage = "Capture complete and pinned"
+                self.statusMessage = "Capture ready"
             }
         }
     }
 
     private func handleSelectionResult(_ result: CapturedSelectionResult) {
         switch result.action {
+        case .quickEdit:
+            quickEditSelection(result.capture)
         case .pin:
             pinSelection(result.capture)
         case .copy:
@@ -414,17 +416,33 @@ final class AppModel {
     }
 
     private func pinSelection(_ capture: CapturedSelection) {
-        let item = CaptureItem(
-            image: capture.image,
-            cgImage: capture.cgImage,
-            originalRect: capture.appKitRect
-        )
+        let item = makeCaptureItem(from: capture)
         captures.insert(item, at: 0)
         selectCapture(item)
         panelManager.present(item: item, appModel: self)
 
         statusMessage = "Recognizing text and preparing annotations"
         performOCR(for: item)
+    }
+
+    private func quickEditSelection(_ capture: CapturedSelection) {
+        let item = makeCaptureItem(from: capture)
+        item.showToolbar = true
+        captures.insert(item, at: 0)
+        selectCapture(item)
+        panelManager.present(item: item, appModel: self)
+
+        statusMessage = "Quick edit opened; OCR is running"
+        performOCR(for: item)
+    }
+
+    private func makeCaptureItem(from capture: CapturedSelection) -> CaptureItem {
+        let item = CaptureItem(
+            image: capture.image,
+            cgImage: capture.cgImage,
+            originalRect: capture.appKitRect
+        )
+        return item
     }
 
     private func copySelection(_ capture: CapturedSelection) {

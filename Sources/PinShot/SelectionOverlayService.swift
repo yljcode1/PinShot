@@ -10,6 +10,7 @@ struct ScreenSelection {
 }
 
 enum SelectionOverlayAction {
+    case quickEdit
     case pin
     case copy
 }
@@ -93,6 +94,7 @@ final class SelectionOverlayView: NSView {
     private let toolbarContainer = NSVisualEffectView()
     private let toolbarStackView = NSStackView()
     private let actionStackView = NSStackView()
+    private let quickEditButton = NSButton(title: "Quick Edit", target: nil, action: nil)
     private let pinButton = NSButton(title: "Pin", target: nil, action: nil)
     private let copyButton = NSButton(title: "Copy", target: nil, action: nil)
 
@@ -179,7 +181,24 @@ final class SelectionOverlayView: NSView {
             return
         }
         if event.keyCode == UInt16(kVK_Return) || event.keyCode == UInt16(kVK_ANSI_KeypadEnter) {
-            commitSelection()
+            commitSelection(action: .quickEdit)
+            return
+        }
+        if event.modifierFlags.contains(.command),
+           let characters = event.charactersIgnoringModifiers?.lowercased() {
+            switch characters {
+            case "c":
+                commitSelection(action: .copy)
+                return
+            case "p":
+                commitSelection(action: .pin)
+                return
+            default:
+                break
+            }
+        }
+        if let characters = event.charactersIgnoringModifiers?.lowercased(), characters == "e" {
+            commitSelection(action: .quickEdit)
             return
         }
         super.keyDown(with: event)
@@ -213,6 +232,18 @@ final class SelectionOverlayView: NSView {
         toolbarContainer.layer?.shadowOffset = CGSize(width: 0, height: -2)
         toolbarContainer.isHidden = true
 
+        quickEditButton.target = self
+        quickEditButton.action = #selector(quickEditTapped)
+
+        configureActionButton(
+            quickEditButton,
+            title: "Quick Edit",
+            symbolName: "slider.horizontal.3",
+            bezelColor: .systemOrange,
+            contentTintColor: .white,
+            toolTip: "Open the selection with toolbar, OCR, and annotation tools (Return / E)"
+        )
+
         pinButton.target = self
         pinButton.action = #selector(pinTapped)
 
@@ -222,7 +253,7 @@ final class SelectionOverlayView: NSView {
             symbolName: "pin.fill",
             bezelColor: .systemBlue,
             contentTintColor: .white,
-            toolTip: "Pin the selected area to the desktop (Return)"
+            toolTip: "Pin the selected area to the desktop (Command+P)"
         )
 
         copyButton.target = self
@@ -240,6 +271,7 @@ final class SelectionOverlayView: NSView {
         actionStackView.orientation = .horizontal
         actionStackView.spacing = 8
         actionStackView.alignment = .centerY
+        actionStackView.addArrangedSubview(quickEditButton)
         actionStackView.addArrangedSubview(pinButton)
         actionStackView.addArrangedSubview(copyButton)
 
@@ -292,6 +324,11 @@ final class SelectionOverlayView: NSView {
     }
 
     @objc
+    private func quickEditTapped() {
+        commitSelection(action: .quickEdit)
+    }
+
+    @objc
     private func pinTapped() {
         commitSelection(action: .pin)
     }
@@ -301,7 +338,7 @@ final class SelectionOverlayView: NSView {
         commitSelection(action: .copy)
     }
 
-    private func commitSelection(action: SelectionOverlayAction = .pin) {
+    private func commitSelection(action: SelectionOverlayAction = .quickEdit) {
         guard let rect = committedRect else { return }
 
         let globalRect = CGRect(
