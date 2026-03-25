@@ -37,18 +37,7 @@ final class ScreenshotService {
         }
         let selection = selectionResult.selection
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-
-        let cgImage: CGImage
-        switch selection.kind {
-        case .area:
-            cgImage = try await captureArea(selection.appKitRect, content: content)
-        case .window(let windowID):
-            cgImage = try await captureWindow(
-                windowID: windowID,
-                selectionRect: selection.appKitRect,
-                content: content
-            )
-        }
+        let cgImage = try await captureArea(selection.appKitRect, content: content)
 
         let image = NSImage(cgImage: cgImage, size: selection.appKitRect.size)
         let capture = CapturedSelection(image: image, cgImage: cgImage, appKitRect: selection.appKitRect)
@@ -117,39 +106,6 @@ final class ScreenshotService {
         }
 
         throw ScreenshotError.imageLoadFailed
-    }
-
-    private func captureWindow(
-        windowID: CGWindowID,
-        selectionRect: CGRect,
-        content: SCShareableContent
-    ) async throws -> CGImage {
-        guard let window = content.windows.first(where: { $0.windowID == windowID }) else {
-            return try await captureArea(selectionRect, content: content)
-        }
-
-        let scale = pointPixelScale(
-            for: window.frame,
-            displays: displaySegments(intersecting: window.frame, content: content)
-        )
-
-        let configuration = SCStreamConfiguration()
-        configuration.width = max(1, Int((window.frame.width * scale).rounded()))
-        configuration.height = max(1, Int((window.frame.height * scale).rounded()))
-        configuration.showsCursor = false
-        configuration.scalesToFit = false
-        configuration.ignoreShadowsSingleWindow = false
-
-        let filter = SCContentFilter(desktopIndependentWindow: window)
-
-        do {
-            return try await SCScreenshotManager.captureImage(
-                contentFilter: filter,
-                configuration: configuration
-            )
-        } catch {
-            return try await captureArea(selectionRect, content: content)
-        }
     }
 
     private func displaySegments(intersecting rect: CGRect, content: SCShareableContent) -> [DisplaySegment] {
