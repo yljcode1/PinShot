@@ -11,7 +11,7 @@ on:
 
 jobs:
   build:
-    runs-on: macos-14
+    runs-on: macos-15
     strategy:
       matrix:
         configuration: [debug, release]
@@ -35,7 +35,7 @@ jobs:
         run: swift build -c ${{ matrix.configuration }}
 
   tests:
-    runs-on: macos-14
+    runs-on: macos-15
     needs: build
 
     steps:
