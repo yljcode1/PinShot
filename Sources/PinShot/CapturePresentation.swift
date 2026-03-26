@@ -25,12 +25,16 @@ enum CapturePlacementResolver {
         screenScale: CGFloat
     ) -> CGRect {
         let scale = max(screenScale, 1)
-        let size = CGSize(
+        let naturalSize = CGSize(
             width: imagePixelSize.width / scale,
             height: imagePixelSize.height / scale
         )
 
-        let layoutFrame = screenVisibleFrame ?? CGRect(origin: .zero, size: size)
+        let layoutFrame = screenVisibleFrame ?? CGRect(origin: .zero, size: naturalSize)
+        let size = CGSize(
+            width: min(naturalSize.width, layoutFrame.width),
+            height: min(naturalSize.height, layoutFrame.height)
+        )
         var origin = CGPoint(
             x: initialMouseLocation.x - size.width / 2,
             y: initialMouseLocation.y - size.height / 2

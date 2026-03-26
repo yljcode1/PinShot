@@ -6,6 +6,11 @@ import UniformTypeIdentifiers
 @MainActor
 @Observable
 final class AppModel {
+    private enum ZoomLimits {
+        static let minimum = 0.2
+        static let maximum = 4.0
+    }
+
     static let shared = AppModel()
 
     var captures: [CaptureItem] = []
@@ -83,10 +88,7 @@ final class AppModel {
     func copyImage(for item: CaptureItem) {
         panelManager.commitEditing(for: item.id)
         let outputImage = AnnotationRenderer.render(item: item) ?? item.image
-        let didCopy = copyImageToPasteboard(outputImage)
-        statusMessage = didCopy
-            ? "Screenshot copied to clipboard"
-            : "Copy failed: could not write image to clipboard"
+        updateCopyStatus(copyImageToPasteboard(outputImage), successMessage: "Screenshot copied to clipboard")
     }
 
     func saveImage(for item: CaptureItem) {
@@ -121,26 +123,23 @@ final class AppModel {
     }
 
     func updateZoom(for item: CaptureItem) {
-        panelManager.refresh(item: item, appModel: self)
+        item.zoom = clampedZoom(item.zoom)
+        refreshCapture(item)
     }
 
     func adjustZoom(for item: CaptureItem, deltaY: CGFloat) {
         let step = deltaY > 0 ? 0.06 : -0.06
-        item.zoom = min(4, max(0.2, item.zoom + step))
-        panelManager.refresh(item: item, appModel: self)
+        setZoom(item.zoom + step, for: item)
     }
 
     func magnify(for item: CaptureItem, magnification: CGFloat) {
         // AppKit magnification: outward pinch => positive, inward pinch => negative.
         // Using exp() keeps pinch in/out symmetric and smoother than repeated linear steps.
-        let nextZoom = item.zoom * CoreGraphics.exp(magnification)
-        item.zoom = min(4, max(0.2, nextZoom))
-        panelManager.refresh(item: item, appModel: self)
+        setZoom(item.zoom * CoreGraphics.exp(magnification), for: item)
     }
 
     func resetZoom(for item: CaptureItem) {
-        item.zoom = 1
-        panelManager.refresh(item: item, appModel: self)
+        setZoom(1, for: item)
     }
 
     func refreshCapture(_ item: CaptureItem) {
@@ -148,19 +147,19 @@ final class AppModel {
     }
 
     func toggleInspector(for item: CaptureItem) {
-        let changedCaptures = applySelection(to: item)
-        item.showInspector.toggle()
-        item.showToolbar = true
-        refreshCaptures(changedCaptures + [item])
+        updateSelectedCapture(item) { currentItem in
+            currentItem.showInspector.toggle()
+            currentItem.showToolbar = true
+        }
     }
 
     func toggleToolbar(for item: CaptureItem) {
-        let changedCaptures = applySelection(to: item)
-        item.showToolbar.toggle()
-        if !item.showToolbar {
-            item.showInspector = false
+        updateSelectedCapture(item) { currentItem in
+            currentItem.showToolbar.toggle()
+            if !currentItem.showToolbar {
+                currentItem.showInspector = false
+            }
         }
-        refreshCaptures(changedCaptures + [item])
     }
 
     func selectCapture(_ item: CaptureItem) {
@@ -176,29 +175,14 @@ final class AppModel {
     }
 
     func setAnnotationTool(_ tool: AnnotationTool, for item: CaptureItem) {
-        let changedCaptures = applySelection(to: item)
-        item.annotationTool = tool
-        item.showToolbar = true
-        if item.showInspector {
-            item.showInspector = false
+        updateSelectedCapture(item) { currentItem in
+            currentItem.annotationTool = tool
+            currentItem.showToolbar = true
+            if currentItem.showInspector {
+                currentItem.showInspector = false
+            }
         }
-        switch tool {
-        case .none:
-            statusMessage = "Normal: drag or pinch to zoom"
-        case .selectText:
-            statusMessage = "Text selection: drag to select text and copy"
-        case .pen:
-            statusMessage = "Pen: draw directly on the image"
-        case .rectangle:
-            statusMessage = "Rectangle: drag to highlight area"
-        case .arrow:
-            statusMessage = "Arrow: drag to point at content"
-        case .mosaic:
-            statusMessage = "Mosaic: draw to blur, drag to move, drag handle to resize, Delete to remove"
-        case .text:
-            statusMessage = "Text: click to type, or press Command+V to paste"
-        }
-        refreshCaptures(changedCaptures + [item])
+        statusMessage = annotationToolStatusMessage(for: tool)
     }
 
     func setAnnotationColor(_ color: AnnotationColor, for item: CaptureItem) {
@@ -340,6 +324,43 @@ final class AppModel {
         return captures.first(where: { $0.id == id })
     }
 
+    private func clampedZoom(_ zoom: Double) -> Double {
+        min(ZoomLimits.maximum, max(ZoomLimits.minimum, zoom))
+    }
+
+    private func setZoom(_ zoom: Double, for item: CaptureItem) {
+        item.zoom = clampedZoom(zoom)
+        refreshCapture(item)
+    }
+
+    private func updateSelectedCapture(
+        _ item: CaptureItem,
+        updates: (CaptureItem) -> Void
+    ) {
+        let changedCaptures = applySelection(to: item)
+        updates(item)
+        refreshCaptures(changedCaptures + [item])
+    }
+
+    private func annotationToolStatusMessage(for tool: AnnotationTool) -> String {
+        switch tool {
+        case .none:
+            return "Normal: drag or pinch to zoom"
+        case .selectText:
+            return "Text selection: drag to select text and copy"
+        case .pen:
+            return "Pen: draw directly on the image"
+        case .rectangle:
+            return "Rectangle: drag to highlight area"
+        case .arrow:
+            return "Arrow: drag to point at content"
+        case .mosaic:
+            return "Mosaic: draw to blur, drag to move, drag handle to resize, Delete to remove"
+        case .text:
+            return "Text: click to type, or press Command+V to paste"
+        }
+    }
+
     private func applySelection(to item: CaptureItem) -> [CaptureItem] {
         var changedCaptures: [CaptureItem] = []
 
@@ -388,19 +409,15 @@ final class AppModel {
     }
 
     private func makeCaptureItem(from capture: CapturedSelection) -> CaptureItem {
-        let item = CaptureItem(
+        CaptureItem(
             image: capture.image,
             cgImage: capture.cgImage,
             originalRect: capture.appKitRect
         )
-        return item
     }
 
     private func copySelection(_ capture: CapturedSelection) {
-        let didCopy = copyImageToPasteboard(capture.image)
-        statusMessage = didCopy
-            ? "Selection copied to clipboard"
-            : "Copy failed: could not write image to clipboard"
+        updateCopyStatus(copyImageToPasteboard(capture.image), successMessage: "Selection copied to clipboard")
     }
 
     @discardableResult
@@ -425,15 +442,9 @@ final class AppModel {
 
         switch action {
         case .quickEdit:
-            item.showToolbar = true
-            item.showInspector = false
-            panelManager.refresh(item: item, appModel: self)
-            statusMessage = "Quick edit opened; OCR is running"
+            updatePresentedSelection(item, showToolbar: true, status: "Quick edit opened; OCR is running")
         case .pin:
-            item.showToolbar = false
-            item.showInspector = false
-            panelManager.refresh(item: item, appModel: self)
-            statusMessage = "Capture pinned"
+            updatePresentedSelection(item, showToolbar: false, status: "Capture pinned")
         case .copy:
             copyImage(for: item)
         }
@@ -445,6 +456,17 @@ final class AppModel {
         }
 
         return CGPoint(x: fallbackRect.midX, y: fallbackRect.minY)
+    }
+
+    private func updatePresentedSelection(
+        _ item: CaptureItem,
+        showToolbar: Bool,
+        status: String
+    ) {
+        item.showToolbar = showToolbar
+        item.showInspector = false
+        refreshCapture(item)
+        statusMessage = status
     }
 
     private func registerHotKeyHandler() {
@@ -538,6 +560,12 @@ final class AppModel {
         }
 
         return didWrite
+    }
+
+    private func updateCopyStatus(_ didCopy: Bool, successMessage: String) {
+        statusMessage = didCopy
+            ? successMessage
+            : "Copy failed: could not write image to clipboard"
     }
 }
 
