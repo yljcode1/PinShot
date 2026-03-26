@@ -10,7 +10,7 @@
    - `rm -rf PinShot.app && mkdir -p PinShot.app/Contents/{MacOS,Resources}`
    - `install -m 755 .build/release/PinShot PinShot.app/Contents/MacOS/PinShot`
    - `cp Support/Info.plist PinShot.app/Contents/Info.plist`
-   - `PinShot.app/Contents/MacOS/PinShot --self-check`
+   - `PinShot.app/Contents/MacOS/PinShot --all-checks`
    - Run `open PinShot.app` to verify hotkey, OCR, translation.
 
 3. **Create PR to master**
@@ -21,8 +21,9 @@
 4. **Tag & release**
    - After PR merge: `git checkout master && git pull`
    - `git tag vX.Y.Z && git push origin vX.Y.Z`
-   - `zip -r PinShot.app.zip PinShot.app`
-   - `gh release create vX.Y.Z PinShot.app.zip --title "PinShot X.Y.Z" --notes "<summary>"`
+   - `ditto -c -k --keepParent PinShot.app dist/PinShot-X.Y.Z-macos-arm64.zip`
+   - `scripts/build_dmg.sh X.Y.Z`
+   - `gh release create vX.Y.Z dist/PinShot-X.Y.Z-macos-arm64.zip dist/PinShot-X.Y.Z-macos-arm64.dmg --title "PinShot X.Y.Z" --notes-file docs/release-notes-X.Y.Z.md`
 
 5. **Post-release**
    - Announce build + share release link.
