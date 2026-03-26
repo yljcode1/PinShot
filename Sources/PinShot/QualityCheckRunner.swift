@@ -229,6 +229,24 @@ enum QualityCheckRunner {
             "Chinese OCR text targets English translation",
             failures: &failures
         )
+
+        let sensitiveMatches = SensitiveContentRedactionSupport.matches(
+            in: "Email support@pinshot.app Phone +86 138 0013 8000 Link https://pinshot.app/demo/ABC123456789 Order AB20260326000123"
+        )
+        let detectedKinds = Set(sensitiveMatches.map(\.kind))
+        CheckSupport.expect(detectedKinds.contains(.email), "Sensitive matcher detects email addresses", failures: &failures)
+        CheckSupport.expect(detectedKinds.contains(.phoneNumber), "Sensitive matcher detects phone numbers", failures: &failures)
+        CheckSupport.expect(detectedKinds.contains(.link), "Sensitive matcher detects links", failures: &failures)
+        CheckSupport.expect(detectedKinds.contains(.identifier), "Sensitive matcher detects long IDs or order numbers", failures: &failures)
+
+        let mergedRegions = SensitiveContentRedactionSupport.mergedRegions(
+            from: [
+                CGRect(x: 0.10, y: 0.20, width: 0.18, height: 0.08),
+                CGRect(x: 0.27, y: 0.21, width: 0.16, height: 0.08),
+                CGRect(x: 0.70, y: 0.65, width: 0.12, height: 0.10)
+            ]
+        )
+        CheckSupport.expect(mergedRegions.count == 2, "Nearby sensitive boxes merge into cleaner redaction regions", failures: &failures)
     }
 
     private static func runIntegrationChecks(failures: inout [String]) {

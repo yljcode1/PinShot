@@ -1,13 +1,23 @@
 import Foundation
 import NaturalLanguage
-@preconcurrency import Translation
 
 struct TranslationPlan {
-    let configuration: TranslationSession.Configuration
+    let sourceLanguageIdentifier: String?
+    let targetLanguageIdentifier: String
     let label: String
 }
 
 enum TranslationSupport {
+    static var isRuntimeSupported: Bool {
+        if #available(macOS 15, *) {
+            return true
+        }
+
+        return false
+    }
+
+    static let unavailableMessage = "Translation requires macOS 15 or later"
+
     static func plan(for text: String) -> TranslationPlan? {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, trimmed != CaptureText.noTextRecognized else {
@@ -22,36 +32,37 @@ enum TranslationSupport {
         let targetLanguage = targetLanguage(for: detectedLanguage)
 
         return TranslationPlan(
-            configuration: .init(source: sourceLanguage, target: targetLanguage),
+            sourceLanguageIdentifier: sourceLanguage,
+            targetLanguageIdentifier: targetLanguage,
             label: "\(languageLabel(for: detectedLanguage)) -> \(languageLabel(for: targetLanguage))"
         )
     }
 
-    private static func localeLanguage(from language: NLLanguage?) -> Locale.Language? {
+    private static func localeLanguage(from language: NLLanguage?) -> String? {
         guard let language else { return nil }
 
         switch language {
         case .simplifiedChinese:
-            return Locale.Language(identifier: "zh-Hans")
+            return "zh-Hans"
         case .traditionalChinese:
-            return Locale.Language(identifier: "zh-Hant")
+            return "zh-Hant"
         case .english:
-            return Locale.Language(identifier: "en")
+            return "en"
         case .japanese:
-            return Locale.Language(identifier: "ja")
+            return "ja"
         case .korean:
-            return Locale.Language(identifier: "ko")
+            return "ko"
         default:
-            return Locale.Language(identifier: language.rawValue)
+            return language.rawValue
         }
     }
 
-    private static func targetLanguage(for language: NLLanguage?) -> Locale.Language {
+    private static func targetLanguage(for language: NLLanguage?) -> String {
         switch language {
         case .simplifiedChinese, .traditionalChinese:
-            return Locale.Language(identifier: "en")
+            return "en"
         default:
-            return Locale.Language(identifier: "zh-Hans")
+            return "zh-Hans"
         }
     }
 
@@ -74,12 +85,12 @@ enum TranslationSupport {
         }
     }
 
-    private static func languageLabel(for language: Locale.Language?) -> String {
-        guard let identifier = language?.minimalIdentifier else {
+    private static func languageLabel(for languageIdentifier: String?) -> String {
+        guard let languageIdentifier else {
             return "Auto"
         }
 
-        switch identifier {
+        switch languageIdentifier {
         case "zh", "zh-Hans":
             return "Chinese (Simplified)"
         case "zh-Hant":
@@ -91,7 +102,7 @@ enum TranslationSupport {
         case "ko":
             return "Korean"
         default:
-            return identifier
+            return languageIdentifier
         }
     }
 }

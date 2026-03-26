@@ -16,6 +16,7 @@
 - 历史搜索与筛选
 - 透明度调节
 - 贴图马赛克打码
+- 一键智能打码（手机号 / 邮箱 / 链接 / 编号 / 二维码）
 - PNG / JPEG / 文本 / 资料包导出
 
 ## 当前实现
@@ -34,6 +35,7 @@
 - 历史列表支持按 OCR / 已翻译 / 已标注筛选，也支持关键字搜索
 - 每个贴图窗口都可以单独调节透明度
 - 新增马赛克工具：在贴图上框选区域即可快速打码
+- 新增 Smart Mask：自动识别手机号、邮箱、链接、长编号与二维码并批量打码
 - 贴图工具栏新增缩放、文本导出、资料包导出等快捷操作
 - OCR / 翻译面板支持复制与保存文本结果
 
@@ -57,7 +59,9 @@ swift run PinShot --all-checks
 - Excel 用例表：`/Users/yaolijun/Documents/PinShot/docs/testing/PinShot-test-cases.xlsx`
 - 本轮测试报告：`/Users/yaolijun/Documents/PinShot/docs/testing/test-report-2026-03-26-feature-refresh.md:1`
 
-需要 `macOS 15+`。
+需要 `macOS 14.1+`。
+
+其中系统翻译能力需要 `macOS 15+`，在 `macOS 14.1` 上会自动降级为仅保留截图、贴图、OCR、标注、导出等核心功能。
 
 首次使用时，macOS 可能会要求你授予：
 

@@ -30,7 +30,11 @@ enum CaptureHistoryFormatter {
             badges.append("Translated")
         }
 
-        if item.hasAnnotations {
+        if item.hasSmartRedactions {
+            badges.append("Masked")
+        }
+
+        if item.hasManualAnnotations {
             badges.append("Annotated")
         }
 
@@ -261,17 +265,27 @@ enum PinPanelLayout {
         showToolbar: Bool,
         showInspector: Bool
     ) -> CGSize {
+        let sectionSpacing: CGFloat = 10
         let maxWidth: CGFloat = visibleFrame.width * 0.94
         let maxHeight: CGFloat = visibleFrame.height * 0.94
         let minWidth: CGFloat = 40
         let minHeight: CGFloat = 40
-        let toolbarHeight: CGFloat = showToolbar ? 58 : 0
-        let inspectorHeight: CGFloat = showInspector ? 210 : 0
-        let inspectorSpacing: CGFloat = showInspector ? 12 : 0
-
         let requestedWidth = originalRect.width * zoom
+        let toolbarHeight: CGFloat
+        if showToolbar {
+            toolbarHeight = requestedWidth < 360 ? 42 : 58
+        } else {
+            toolbarHeight = 0
+        }
+        let inspectorHeight: CGFloat = showInspector ? 210 : 0
+        let toolbarSpacing: CGFloat = showToolbar ? sectionSpacing : 0
+        let inspectorSpacing: CGFloat = showInspector ? sectionSpacing : 0
+
         let requestedHeight = originalRect.height * zoom
-        let availableImageHeight = max(40, maxHeight - toolbarHeight - inspectorHeight - inspectorSpacing)
+        let availableImageHeight = max(
+            40,
+            maxHeight - toolbarHeight - inspectorHeight - toolbarSpacing - inspectorSpacing
+        )
 
         let widthRatio = maxWidth / max(requestedWidth, 1)
         let heightRatio = availableImageHeight / max(requestedHeight, 1)
@@ -280,7 +294,7 @@ enum PinPanelLayout {
         let width = max(minWidth, requestedWidth * fitScale)
         let height = max(
             minHeight,
-            requestedHeight * fitScale + toolbarHeight + inspectorHeight + inspectorSpacing
+            requestedHeight * fitScale + toolbarHeight + inspectorHeight + toolbarSpacing + inspectorSpacing
         )
 
         return CGSize(width: width, height: height)
