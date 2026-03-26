@@ -1,5 +1,7 @@
+import AppKit
 import CoreGraphics
 import Foundation
+import UniformTypeIdentifiers
 
 enum CaptureText {
     static let recognizing = "Recognizing text..."
@@ -14,6 +16,178 @@ enum CaptureHistoryFormatter {
         }
 
         return String(snippet.prefix(26))
+    }
+
+    @MainActor
+    static func detail(for item: CaptureItem) -> String {
+        var badges: [String] = []
+
+        if item.hasRecognizedText {
+            badges.append("OCR")
+        }
+
+        if item.hasTranslatedText {
+            badges.append("Translated")
+        }
+
+        if item.hasAnnotations {
+            badges.append("Annotated")
+        }
+
+        if badges.isEmpty {
+            return "Fresh capture"
+        }
+
+        return badges.joined(separator: " · ")
+    }
+
+    @MainActor
+    static func searchableText(for item: CaptureItem) -> String {
+        [
+            title(for: item.recognizedText, createdAt: item.createdAt),
+            item.recognizedText,
+            item.translatedText
+        ]
+        .joined(separator: "\n")
+        .lowercased()
+    }
+
+    @MainActor
+    static func suggestedFileStem(for item: CaptureItem) -> String {
+        let title = title(for: item.recognizedText, createdAt: item.createdAt)
+        let cleaned = title
+            .replacingOccurrences(of: "/", with: "-")
+            .replacingOccurrences(of: ":", with: "-")
+            .replacingOccurrences(of: "\n", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if cleaned.isEmpty {
+            return "PinShot-\(Int(item.createdAt.timeIntervalSince1970))"
+        }
+
+        return String(cleaned.prefix(42)).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
+enum CaptureHistoryFilter: String, CaseIterable, Identifiable {
+    case all
+    case text
+    case translated
+    case annotated
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .all:
+            return "All"
+        case .text:
+            return "Text"
+        case .translated:
+            return "Translated"
+        case .annotated:
+            return "Annotated"
+        }
+    }
+
+    @MainActor
+    func includes(_ item: CaptureItem) -> Bool {
+        switch self {
+        case .all:
+            return true
+        case .text:
+            return item.hasRecognizedText
+        case .translated:
+            return item.hasTranslatedText
+        case .annotated:
+            return item.hasAnnotations
+        }
+    }
+}
+
+enum CaptureExportFormat: String, CaseIterable, Identifiable {
+    case png
+    case jpeg
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .png:
+            return "PNG"
+        case .jpeg:
+            return "JPEG"
+        }
+    }
+
+    var fileExtension: String {
+        switch self {
+        case .png:
+            return "png"
+        case .jpeg:
+            return "jpg"
+        }
+    }
+
+    var contentType: UTType {
+        switch self {
+        case .png:
+            return .png
+        case .jpeg:
+            return .jpeg
+        }
+    }
+}
+
+enum CaptureTextExportKind {
+    case recognized
+    case translated
+
+    var title: String {
+        switch self {
+        case .recognized:
+            return "OCR Text"
+        case .translated:
+            return "Translated Text"
+        }
+    }
+
+    @MainActor
+    func text(from item: CaptureItem) -> String {
+        switch self {
+        case .recognized:
+            return item.recognizedText
+        case .translated:
+            return item.translatedText
+        }
+    }
+}
+
+enum SetupGuideDestination {
+    case screenRecording
+    case accessibility
+    case loginItems
+
+    var title: String {
+        switch self {
+        case .screenRecording:
+            return "Screen Recording"
+        case .accessibility:
+            return "Accessibility"
+        case .loginItems:
+            return "Login Items"
+        }
+    }
+
+    var url: URL? {
+        switch self {
+        case .screenRecording:
+            return URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
+        case .accessibility:
+            return URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+        case .loginItems:
+            return URL(string: "x-apple.systempreferences:com.apple.LoginItems-Settings.extension")
+        }
     }
 }
 

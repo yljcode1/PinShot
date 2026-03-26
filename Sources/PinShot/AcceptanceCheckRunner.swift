@@ -8,6 +8,7 @@ enum AcceptanceCheckRunner {
         var failures: [String] = []
 
         testShortcutPreferenceWorkflow(failures: &failures)
+        testSetupGuidePreferenceWorkflow(failures: &failures)
         testAnnotatedExportWorkflow(failures: &failures)
         testTranslationPlanningWorkflow(failures: &failures)
         testPinnedLayoutWorkflow(failures: &failures)
@@ -43,6 +44,22 @@ enum AcceptanceCheckRunner {
             "Shortcut preference workflow persists and restores the chosen hotkey",
             failures: &failures
         )
+    }
+
+    private static func testSetupGuidePreferenceWorkflow(failures: inout [String]) {
+        guard let defaults = CheckSupport.makeUserDefaultsSuite(
+            prefix: "PinShotAcceptance.SetupGuide",
+            failureMessage: "Could not create isolated UserDefaults suite for setup guide workflow.",
+            failures: &failures
+        ) else {
+            return
+        }
+
+        let preferences = AppPreferences(userDefaults: defaults)
+        CheckSupport.expect(preferences.showSetupGuideOnLaunch, "Setup guide shows on first launch", failures: &failures)
+
+        preferences.markSetupGuideDismissed()
+        CheckSupport.expect(!preferences.showSetupGuideOnLaunch, "Setup guide can be skipped and stays hidden", failures: &failures)
     }
 
     private static func testAnnotatedExportWorkflow(failures: inout [String]) {

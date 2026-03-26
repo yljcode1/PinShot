@@ -28,6 +28,7 @@ enum SelfCheckRunner {
 
         let preferences = AppPreferences(userDefaults: defaults)
         CheckSupport.expect(preferences.launchAtLoginEnabled, "Launch-at-login defaults to enabled", failures: &failures)
+        CheckSupport.expect(preferences.showSetupGuideOnLaunch, "Setup guide defaults to visible", failures: &failures)
 
         let configuration = HotKeyConfiguration(
             keyCode: 12,

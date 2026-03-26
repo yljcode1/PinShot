@@ -99,6 +99,7 @@ enum QualityCheckRunner {
         ) {
             let preferences = AppPreferences(userDefaults: defaults)
             CheckSupport.expect(preferences.launchAtLoginEnabled, "Launch-at-login defaults to enabled", failures: &failures)
+            CheckSupport.expect(preferences.showSetupGuideOnLaunch, "Setup guide defaults to shown on first launch", failures: &failures)
 
             let configuration = HotKeyConfiguration(
                 keyCode: 9,
@@ -118,6 +119,12 @@ enum QualityCheckRunner {
                 "Invalid hotkey data falls back to the default shortcut",
                 failures: &failures
             )
+
+            preferences.markSetupGuideDismissed()
+            CheckSupport.expect(!preferences.showSetupGuideOnLaunch, "Setup guide dismissal persists", failures: &failures)
+
+            preferences.resetSetupGuide()
+            CheckSupport.expect(preferences.showSetupGuideOnLaunch, "Setup guide can be reset for later display", failures: &failures)
         }
 
         let historyTitle = CaptureHistoryFormatter.title(
@@ -131,6 +138,40 @@ enum QualityCheckRunner {
             createdAt: Date(timeIntervalSince1970: 1_711_360_000)
         )
         CheckSupport.expect(fallbackTitle.hasPrefix("Capture "), "History formatter falls back for placeholder OCR text", failures: &failures)
+
+        if let item = CheckSupport.makeAnnotatedCapture(recognizedText: "  PinShot release note  ", textOverlay: "Demo") {
+            item.translatedText = "已翻译完成"
+            CheckSupport.expect(
+                CaptureHistoryFormatter.detail(for: item) == "OCR · Translated · Annotated",
+                "History formatter summarizes OCR, translation, and annotations",
+                failures: &failures
+            )
+            CheckSupport.expect(
+                CaptureHistoryFormatter.searchableText(for: item).contains("release note"),
+                "History formatter builds searchable content from OCR text",
+                failures: &failures
+            )
+            CheckSupport.expect(
+                CaptureHistoryFormatter.suggestedFileStem(for: item).contains("PinShot release note"),
+                "History formatter derives a readable export filename",
+                failures: &failures
+            )
+            CheckSupport.expect(CaptureHistoryFilter.text.includes(item), "Text history filter includes OCR-ready captures", failures: &failures)
+            CheckSupport.expect(CaptureHistoryFilter.translated.includes(item), "Translated history filter includes translated captures", failures: &failures)
+            CheckSupport.expect(CaptureHistoryFilter.annotated.includes(item), "Annotated history filter includes marked captures", failures: &failures)
+            CheckSupport.expect(
+                CaptureTextExportKind.recognized.text(from: item) == item.recognizedText,
+                "Recognized text export returns OCR content",
+                failures: &failures
+            )
+            CheckSupport.expect(
+                CaptureTextExportKind.translated.text(from: item) == item.translatedText,
+                "Translated text export returns translated content",
+                failures: &failures
+            )
+        } else {
+            failures.append("Could not create annotated capture fixture for history filter checks.")
+        }
 
         let inferredRect = CapturePlacementResolver.inferredRect(
             imagePixelSize: CGSize(width: 600, height: 300),
@@ -228,5 +269,8 @@ enum QualityCheckRunner {
         )
         CheckSupport.expect(mosaicImage != nil, "Mosaic renderer produces an image for a clamped selection", failures: &failures)
         CheckSupport.expect((mosaicImage?.width ?? 0) > 0 && (mosaicImage?.height ?? 0) > 0, "Mosaic renderer output has valid dimensions", failures: &failures)
+
+        let jpegData = (AnnotationRenderer.render(item: item) ?? fixture.image).jpegData
+        CheckSupport.expect(jpegData?.isEmpty == false, "Rendered captures can be exported as JPEG data", failures: &failures)
     }
 }

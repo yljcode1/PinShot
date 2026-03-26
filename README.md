@@ -12,8 +12,11 @@
 - 截图后可继续选择 Quick Edit / Pin / Copy
 - 开机自启动开关（默认开启）
 - 历史截图再次唤起
+- 首次启动引导（支持跳过）
+- 历史搜索与筛选
 - 透明度调节
 - 贴图马赛克打码
+- PNG / JPEG / 文本 / 资料包导出
 
 ## 当前实现
 
@@ -27,8 +30,12 @@
 - 提供开机自启动开关，打包安装后默认随登录自动启动
 - 支持把 OCR 文字自动翻译成中文或英文
 - 菜单栏中保留最近历史，可再次打开
+- 首次打开时提供权限与启动配置引导，并支持跳过/稍后再说
+- 历史列表支持按 OCR / 已翻译 / 已标注筛选，也支持关键字搜索
 - 每个贴图窗口都可以单独调节透明度
 - 新增马赛克工具：在贴图上框选区域即可快速打码
+- 贴图工具栏新增缩放、文本导出、资料包导出等快捷操作
+- OCR / 翻译面板支持复制与保存文本结果
 
 ## 运行
 
@@ -48,7 +55,7 @@ swift run PinShot --all-checks
 
 - 测试用例清单：`/Users/yaolijun/Documents/PinShot/docs/testing/test-cases.md:1`
 - Excel 用例表：`/Users/yaolijun/Documents/PinShot/docs/testing/PinShot-test-cases.xlsx`
-- 本轮测试报告：`/Users/yaolijun/Documents/PinShot/docs/testing/test-report-0.3.2.md:1`
+- 本轮测试报告：`/Users/yaolijun/Documents/PinShot/docs/testing/test-report-2026-03-26-feature-refresh.md:1`
 
 需要 `macOS 15+`。
 
