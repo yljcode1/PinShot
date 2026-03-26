@@ -369,8 +369,8 @@ final class AppModel {
                 }
                 item.annotations.append(contentsOf: masks)
 
-                refreshCapture(item)
-                statusMessage = smartRedactionStatusMessage(
+                self.refreshCapture(item)
+                self.statusMessage = self.smartRedactionStatusMessage(
                     kinds: result.kinds,
                     maskCount: masks.count
                 )
