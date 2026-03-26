@@ -23,6 +23,7 @@ final class CaptureItem: Identifiable {
     var annotationLineWidth: CGFloat = 3
     var opacity: Double
     var zoom: Double
+    var isDetectingSensitiveContent = false
 
     var hasRecognizedText: Bool {
         let text = recognizedText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -35,6 +36,18 @@ final class CaptureItem: Identifiable {
 
     var hasAnnotations: Bool {
         !annotations.isEmpty
+    }
+
+    var hasManualAnnotations: Bool {
+        annotations.contains { $0.source == .manual }
+    }
+
+    var hasSmartRedactions: Bool {
+        annotations.contains { $0.source == .smartRedaction }
+    }
+
+    var smartRedactionCount: Int {
+        annotations.count { $0.source == .smartRedaction }
     }
 
     init(

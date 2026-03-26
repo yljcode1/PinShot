@@ -4,7 +4,7 @@ import PackageDescription
 let package = Package(
     name: "PinShot",
     platforms: [
-        .macOS(.v15)
+        .macOS("14.1")
     ],
     products: [
         .executable(

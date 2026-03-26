@@ -1,12 +1,10 @@
 import SwiftUI
-@preconcurrency import Translation
-@preconcurrency import _Translation_SwiftUI
 
 struct PinPreviewView: View {
     @Bindable var appModel: AppModel
     @Bindable var item: CaptureItem
     @State private var pendingTranslationText = ""
-    @State private var translationConfiguration: TranslationSession.Configuration?
+    @State private var pendingTranslationPlan: TranslationPlan?
 
     private let selectionColor = Color(red: 0.34, green: 0.63, blue: 1.0)
 
@@ -16,6 +14,17 @@ struct PinPreviewView: View {
 
     private var captureAspectRatio: CGFloat {
         max(item.originalRect.width, 1) / max(item.originalRect.height, 1)
+    }
+
+    private var maximumDisplayedCaptureSize: CGSize {
+        CGSize(
+            width: max(1, item.originalRect.width * item.zoom),
+            height: max(1, item.originalRect.height * item.zoom)
+        )
+    }
+
+    private var usesCompactToolbar: Bool {
+        maximumDisplayedCaptureSize.width < 360
     }
 
     private var inspectorStatusText: String {
@@ -47,24 +56,22 @@ struct PinPreviewView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(Color.clear)
-        .translationTask(translationConfiguration) { session in
-            do {
-                let response = try await translateText(using: session, text: pendingTranslationText)
-                await MainActor.run {
-                    item.translatedText = response.targetText
-                    item.isTranslating = false
-                    translationConfiguration = nil
-                    appModel.statusMessage = "Translation complete"
-                }
-            } catch {
-                await MainActor.run {
-                    item.translatedText = "Translation failed: \(error.localizedDescription)"
-                    item.isTranslating = false
-                    translationConfiguration = nil
-                    appModel.statusMessage = "Translation failed"
-                }
+        .pinShotTranslationTask(
+            plan: pendingTranslationPlan,
+            text: pendingTranslationText,
+            onSuccess: { translatedText in
+                item.translatedText = translatedText
+                item.isTranslating = false
+                pendingTranslationPlan = nil
+                appModel.statusMessage = "Translation complete"
+            },
+            onFailure: { errorDescription in
+                item.translatedText = "Translation failed: \(errorDescription)"
+                item.isTranslating = false
+                pendingTranslationPlan = nil
+                appModel.statusMessage = "Translation failed"
             }
-        }
+        )
         .animation(.easeInOut(duration: 0.16), value: item.showToolbar)
         .animation(.easeInOut(duration: 0.16), value: item.showInspector)
     }
@@ -113,6 +120,12 @@ struct PinPreviewView: View {
                     .blur(radius: 2.5)
             }
         }
+        .overlay(alignment: .topTrailing) {
+            if isSelected {
+                floatingSurfaceControls
+                    .padding(8)
+            }
+        }
         .shadow(
             color: isSelected ? .black.opacity(0.16) : .black.opacity(0.10),
             radius: isSelected ? 4 : 6
@@ -136,10 +149,23 @@ struct PinPreviewView: View {
             }
         }
         .aspectRatio(captureAspectRatio, contentMode: .fit)
-        .frame(maxWidth: .infinity)
+        .frame(
+            maxWidth: maximumDisplayedCaptureSize.width,
+            maxHeight: maximumDisplayedCaptureSize.height
+        )
+        .frame(maxWidth: .infinity, alignment: .top)
     }
 
+    @ViewBuilder
     private var toolbarView: some View {
+        if usesCompactToolbar {
+            compactToolbarView
+        } else {
+            regularToolbarView
+        }
+    }
+
+    private var regularToolbarView: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 10) {
                 ToolbarGroupCard(title: "Panels") {
@@ -215,6 +241,28 @@ struct PinPreviewView: View {
                         .buttonStyle(PinCapsuleButtonStyle(prominence: .subtle))
                         .help("Reset zoom back to 100%")
                     }
+                }
+
+                ToolbarGroupCard(title: "Smart") {
+                    Button {
+                        appModel.applySmartRedaction(for: item)
+                    } label: {
+                        Label(
+                            item.isDetectingSensitiveContent
+                                ? "Scanning..."
+                                : (item.smartRedactionCount > 0 ? "Redo Mask" : "Smart Mask"),
+                            systemImage: item.isDetectingSensitiveContent
+                                ? "hourglass"
+                                : (item.smartRedactionCount > 0 ? "eye.slash.fill" : "eye.slash")
+                        )
+                    }
+                    .buttonStyle(
+                        PinCapsuleButtonStyle(
+                            prominence: item.smartRedactionCount > 0 ? .primary : .secondary
+                        )
+                    )
+                    .disabled(item.isDetectingSensitiveContent)
+                    .help("Detect phone numbers, emails, links, IDs, and QR codes, then add mosaic masks")
                 }
 
                 ToolbarGroupCard(title: "Actions") {
@@ -295,6 +343,110 @@ struct PinPreviewView: View {
         .fixedSize(horizontal: false, vertical: true)
     }
 
+    private var compactToolbarView: some View {
+        HStack(spacing: 8) {
+            Button {
+                appModel.toggleInspector(for: item)
+            } label: {
+                Image(systemName: item.showInspector ? "text.bubble.fill" : "text.bubble")
+            }
+            .buttonStyle(PinToolbarButtonStyle(isActive: item.showInspector))
+            .help(item.showInspector ? "Hide OCR and translation results" : "Open OCR and translation results")
+
+            Menu {
+                compactToolMenuContent
+            } label: {
+                Image(systemName: item.annotationTool == .none ? "pencil.tip.crop.circle" : item.annotationTool.systemImage)
+            }
+            .buttonStyle(PinToolbarButtonStyle(isActive: item.annotationTool != .none))
+            .help("Choose annotation tool")
+
+            Menu {
+                compactColorMenuContent
+            } label: {
+                Circle()
+                    .fill(Color(item.annotationColor.nsColor))
+                    .frame(width: 14, height: 14)
+                    .padding(10)
+            }
+            .buttonStyle(PinToolbarButtonStyle(isActive: false))
+            .help("Choose annotation color")
+
+            Button {
+                appModel.applySmartRedaction(for: item)
+            } label: {
+                Image(systemName: item.isDetectingSensitiveContent ? "hourglass" : "eye.slash")
+            }
+            .buttonStyle(PinToolbarButtonStyle(isActive: item.smartRedactionCount > 0))
+            .disabled(item.isDetectingSensitiveContent)
+            .help("Detect phone numbers, emails, links, IDs, and QR codes, then add mosaic masks")
+
+            Button {
+                appModel.zoomOut(for: item)
+            } label: {
+                Image(systemName: "minus")
+            }
+            .buttonStyle(PinToolbarButtonStyle(isActive: false))
+            .help("Zoom out")
+
+            Text("\(Int(item.zoom * 100))%")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .frame(minWidth: 42)
+
+            Button {
+                appModel.zoomIn(for: item)
+            } label: {
+                Image(systemName: "plus")
+            }
+            .buttonStyle(PinToolbarButtonStyle(isActive: false))
+            .help("Zoom in")
+
+            Menu {
+                compactActionMenuContent
+            } label: {
+                Image(systemName: "ellipsis.circle")
+            }
+            .buttonStyle(PinToolbarButtonStyle(isActive: false))
+            .help("More actions")
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(
+            RoundedRectangle(cornerRadius: 14)
+                .fill(.ultraThinMaterial)
+        )
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private var floatingSurfaceControls: some View {
+        HStack(spacing: 6) {
+            Button {
+                appModel.toggleToolbar(for: item)
+            } label: {
+                Image(systemName: item.showToolbar ? "chevron.down.circle.fill" : "slider.horizontal.3")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .frame(width: 28, height: 28)
+                    .background(.ultraThinMaterial, in: Circle())
+            }
+            .buttonStyle(.plain)
+            .help(item.showToolbar ? "Hide editing controls" : "Show editing controls")
+
+            Button {
+                appModel.removeCapture(item)
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .frame(width: 28, height: 28)
+                    .background(.ultraThinMaterial, in: Circle())
+            }
+            .buttonStyle(.plain)
+            .help("Close this pin")
+        }
+    }
+
     private var inspectorView: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top) {
@@ -310,8 +462,8 @@ struct PinPreviewView: View {
                     beginTranslation()
                 }
                 .buttonStyle(PinCapsuleButtonStyle(prominence: .primary))
-                .disabled(item.isRecognizingText || item.recognizedText.isEmpty || item.recognizedText == CaptureText.noTextRecognized)
-                .help("Translate recognized text")
+                .disabled(!canStartTranslation)
+                .help(translationButtonHelpText)
 
                 Button {
                     dismissInspector()
@@ -332,6 +484,11 @@ struct PinPreviewView: View {
                 }
                 if item.hasAnnotations {
                     PreviewInfoChip(systemImage: "paintbrush.pointed", text: "\(item.annotations.count) mark\(item.annotations.count == 1 ? "" : "s")")
+                }
+                if item.isDetectingSensitiveContent {
+                    PreviewInfoChip(systemImage: "eye.slash", text: "Masking")
+                } else if item.smartRedactionCount > 0 {
+                    PreviewInfoChip(systemImage: "eye.slash", text: "\(item.smartRedactionCount) masked")
                 }
             }
 
@@ -359,7 +516,7 @@ struct PinPreviewView: View {
             InspectorResultPanel(
                 title: item.translationLabel.isEmpty ? "Translation" : item.translationLabel,
                 text: item.isTranslating ? "Translating..." : item.translatedText,
-                placeholder: "Use Translate to generate a translated result",
+                placeholder: translationPlaceholderText,
                 trailingButtons: {
                     HStack(spacing: 8) {
                         Button("Copy") {
@@ -408,13 +565,6 @@ struct PinPreviewView: View {
         .help(annotationToolTooltip(for: tool))
     }
 
-    nonisolated private func translateText(
-        using session: TranslationSession,
-        text: String
-    ) async throws -> TranslationSession.Response {
-        try await session.translate(text)
-    }
-
     private var recognizedTextBody: String {
         if item.recognizedText.isEmpty {
             return ""
@@ -428,7 +578,37 @@ struct PinPreviewView: View {
         appModel.refreshCapture(item)
     }
 
+    private var canStartTranslation: Bool {
+        TranslationSupport.isRuntimeSupported
+            && !item.isRecognizingText
+            && !item.recognizedText.isEmpty
+            && item.recognizedText != CaptureText.noTextRecognized
+    }
+
+    private var translationButtonHelpText: String {
+        if TranslationSupport.isRuntimeSupported {
+            return "Translate recognized text"
+        }
+
+        return TranslationSupport.unavailableMessage
+    }
+
+    private var translationPlaceholderText: String {
+        if TranslationSupport.isRuntimeSupported {
+            return "Use Translate to generate a translated result"
+        }
+
+        return TranslationSupport.unavailableMessage
+    }
+
     private func beginTranslation() {
+        guard TranslationSupport.isRuntimeSupported else {
+            item.isTranslating = false
+            pendingTranslationPlan = nil
+            appModel.statusMessage = TranslationSupport.unavailableMessage
+            return
+        }
+
         guard let plan = TranslationSupport.plan(for: item.recognizedText) else {
             appModel.statusMessage = "No text to translate"
             return
@@ -439,7 +619,7 @@ struct PinPreviewView: View {
         item.translatedText = ""
         item.translationLabel = plan.label
         pendingTranslationText = item.recognizedText
-        translationConfiguration = plan.configuration
+        pendingTranslationPlan = plan
         appModel.statusMessage = "Translating..."
     }
 
@@ -468,8 +648,119 @@ struct PinPreviewView: View {
             return "Switch annotation color to red"
         case .blue:
             return "Switch annotation color to blue"
+        case .yellow:
+            return "Switch annotation color to yellow"
+        case .green:
+            return "Switch annotation color to green"
         default:
             return "Switch annotation color"
+        }
+    }
+
+    @ViewBuilder
+    private var compactToolMenuContent: some View {
+        ForEach(compactAnnotationTools, id: \.self) { tool in
+            Button {
+                appModel.setAnnotationTool(tool, for: item)
+            } label: {
+                Label(compactToolTitle(for: tool), systemImage: item.annotationTool == tool ? "checkmark.circle.fill" : tool.systemImage)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var compactColorMenuContent: some View {
+        ForEach(AnnotationColor.presets, id: \.nsColor.description) { color in
+            Button {
+                appModel.setAnnotationColor(color, for: item)
+            } label: {
+                Label(colorTitle(for: color), systemImage: item.annotationColor == color ? "checkmark.circle.fill" : "circle.fill")
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var compactActionMenuContent: some View {
+        Button("Reset Zoom") {
+            appModel.resetZoom(for: item)
+        }
+
+        Divider()
+
+        Button("Undo Last Annotation") {
+            appModel.undoLastAnnotation(for: item)
+        }
+
+        Button("Clear All Annotations") {
+            appModel.clearAnnotations(for: item)
+        }
+
+        Divider()
+
+        Button("Copy Image") {
+            appModel.copyImage(for: item)
+        }
+
+        Button("Save PNG") {
+            appModel.saveImage(for: item, format: .png)
+        }
+
+        Button("Save JPEG") {
+            appModel.saveImage(for: item, format: .jpeg)
+        }
+
+        Button("Export Package") {
+            appModel.exportCapturePackage(for: item)
+        }
+
+        if item.hasRecognizedText {
+            Button("Save OCR Text") {
+                appModel.saveText(for: item, kind: .recognized)
+            }
+        }
+
+        if item.hasTranslatedText {
+            Button("Save Translated Text") {
+                appModel.saveText(for: item, kind: .translated)
+            }
+        }
+    }
+
+    private var compactAnnotationTools: [AnnotationTool] {
+        [.none, .selectText, .pen, .rectangle, .mosaic, .arrow, .text]
+    }
+
+    private func compactToolTitle(for tool: AnnotationTool) -> String {
+        switch tool {
+        case .none:
+            return "Normal"
+        case .selectText:
+            return "Select Text"
+        case .pen:
+            return "Pen"
+        case .rectangle:
+            return "Rectangle"
+        case .arrow:
+            return "Arrow"
+        case .mosaic:
+            return "Mosaic"
+        case .text:
+            return "Text"
+        }
+    }
+
+    private func colorTitle(for color: AnnotationColor) -> String {
+        switch color {
+        case .red:
+            return "Red"
+        case .blue:
+            return "Blue"
+        case .yellow:
+            return "Yellow"
+        case .green:
+            return "Green"
+        default:
+            return "Color"
         }
     }
 

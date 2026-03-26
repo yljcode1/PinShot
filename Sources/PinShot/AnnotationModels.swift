@@ -1,6 +1,11 @@
 import AppKit
 import CoreGraphics
 
+enum AnnotationSource: String {
+    case manual
+    case smartRedaction
+}
+
 enum AnnotationTool: String {
     case none
     case selectText
@@ -62,18 +67,21 @@ struct ImageAnnotation: Identifiable, Equatable {
     var color: AnnotationColor
     var lineWidth: CGFloat
     var fontSize: CGFloat = 22
+    var source: AnnotationSource = .manual
 
     init(
         id: UUID = UUID(),
         kind: Kind,
         color: AnnotationColor,
         lineWidth: CGFloat,
-        fontSize: CGFloat = 22
+        fontSize: CGFloat = 22,
+        source: AnnotationSource = .manual
     ) {
         self.id = id
         self.kind = kind
         self.color = color
         self.lineWidth = lineWidth
         self.fontSize = fontSize
+        self.source = source
     }
 }

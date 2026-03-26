@@ -56,6 +56,7 @@ final class AppModel {
 
     private let screenshotService = ScreenshotService()
     private let ocrService = OCRService()
+    private let sensitiveContentRedactionService = SensitiveContentRedactionService()
     private let hotKeyService = HotKeyService()
     private let panelManager = PinPanelManager()
     private let actionChooserService = CaptureActionChooserService()
@@ -329,6 +330,52 @@ final class AppModel {
     func clearAnnotations(for item: CaptureItem) {
         item.annotations.removeAll()
         refreshCaptures([item])
+    }
+
+    func applySmartRedaction(for item: CaptureItem) {
+        guard !item.isDetectingSensitiveContent else {
+            statusMessage = "Smart redaction is already running"
+            return
+        }
+
+        updateSelectedCapture(item) { currentItem in
+            currentItem.isDetectingSensitiveContent = true
+            currentItem.showToolbar = true
+        }
+        statusMessage = "Scanning for phone numbers, emails, links, IDs, and QR codes"
+
+        let service = sensitiveContentRedactionService
+        let cgImage = item.cgImage
+
+        Task { [weak self] in
+            let result = await service.detectRegions(in: cgImage)
+
+            await MainActor.run { [weak self] in
+                guard let self,
+                      self.captures.contains(where: { $0.id == item.id }) else {
+                    return
+                }
+
+                item.isDetectingSensitiveContent = false
+                item.annotations.removeAll { $0.source == .smartRedaction }
+
+                let masks = result.regions.map { rect in
+                    ImageAnnotation(
+                        kind: .mosaic(rect: rect),
+                        color: .yellow,
+                        lineWidth: 4,
+                        source: .smartRedaction
+                    )
+                }
+                item.annotations.append(contentsOf: masks)
+
+                refreshCapture(item)
+                statusMessage = smartRedactionStatusMessage(
+                    kinds: result.kinds,
+                    maskCount: masks.count
+                )
+            }
+        }
     }
 
     func removeCapture(_ item: CaptureItem) {
@@ -789,6 +836,27 @@ final class AppModel {
         statusMessage = didCopy
             ? successMessage
             : "Copy failed: could not write image to clipboard"
+    }
+
+    private func smartRedactionStatusMessage(
+        kinds: Set<SensitiveContentKind>,
+        maskCount: Int
+    ) -> String {
+        guard maskCount > 0 else {
+            return "No sensitive content found"
+        }
+
+        let summary = kinds
+            .map(\.title)
+            .sorted()
+            .prefix(3)
+            .joined(separator: ", ")
+
+        if summary.isEmpty {
+            return "Smart redaction added \(maskCount) mask\(maskCount == 1 ? "" : "s")"
+        }
+
+        return "Smart redaction added \(maskCount) mask\(maskCount == 1 ? "" : "s") for \(summary)"
     }
 }
 
