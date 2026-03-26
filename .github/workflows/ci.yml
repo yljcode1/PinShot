@@ -42,10 +42,6 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Run test suite (parallel + coverage)
+      - name: Run automated validation
         run: |
-          if [ -d Tests ]; then
-            swift test --parallel --enable-code-coverage
-          else
-            echo "No Tests directory; skipping swift test."
-          fi
+          swift run PinShot --all-checks

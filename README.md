@@ -36,6 +36,20 @@
 swift run
 ```
 
+## 测试
+
+```bash
+swift run PinShot --unit-check
+swift run PinShot --integration-check
+swift run PinShot --self-check
+swift run PinShot --acceptance-check
+swift run PinShot --all-checks
+```
+
+- 测试用例清单：`/Users/yaolijun/Documents/PinShot/docs/testing/test-cases.md:1`
+- Excel 用例表：`/Users/yaolijun/Documents/PinShot/docs/testing/PinShot-test-cases.xlsx`
+- 本轮测试报告：`/Users/yaolijun/Documents/PinShot/docs/testing/test-report-0.3.2.md:1`
+
 需要 `macOS 15+`。
 
 首次使用时，macOS 可能会要求你授予：
