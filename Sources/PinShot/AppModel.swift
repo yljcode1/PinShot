@@ -19,6 +19,9 @@ final class AppModel {
     var launchAtLoginEnabled = true
     var launchAtLoginState = LaunchAtLoginState.unavailable
     var isRecordingHotKey = false
+    var isShowingSetupGuide = false
+    var historySearchText = ""
+    var historyFilter = CaptureHistoryFilter.all
     var statusMessage = "Use the hotkey to start capturing"
 
     var hasCaptures: Bool {
@@ -31,6 +34,24 @@ final class AppModel {
 
     var launchAtLoginDetail: String {
         launchAtLoginState.detailText
+    }
+
+    var filteredCaptures: [CaptureItem] {
+        captures.filter { item in
+            historyFilter.includes(item) && matchesHistorySearch(item)
+        }
+    }
+
+    var recognizedCaptureCount: Int {
+        captures.filter(\.hasRecognizedText).count
+    }
+
+    var translatedCaptureCount: Int {
+        captures.filter(\.hasTranslatedText).count
+    }
+
+    var annotatedCaptureCount: Int {
+        captures.filter(\.hasAnnotations).count
     }
 
     private let screenshotService = ScreenshotService()
@@ -54,6 +75,10 @@ final class AppModel {
         registerHotKeyHandler()
         installMagnifyMonitorIfNeeded()
         applyLaunchAtLoginPreference(userInitiated: false)
+        isShowingSetupGuide = preferences.showSetupGuideOnLaunch
+        if isShowingSetupGuide {
+            statusMessage = "Welcome to PinShot — finish the setup guide or skip it anytime"
+        }
     }
 
     func captureAndChooseAction() async {
@@ -79,10 +104,19 @@ final class AppModel {
             return
         }
 
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        pasteboard.setString(item.recognizedText, forType: .string)
-        statusMessage = "Recognized text copied"
+        copyText(
+            item.recognizedText,
+            emptyMessage: "No recognized text to copy",
+            successMessage: "Recognized text copied"
+        )
+    }
+
+    func copyTranslatedText(for item: CaptureItem) {
+        copyText(
+            item.translatedText,
+            emptyMessage: "No translated text to copy",
+            successMessage: "Translated text copied"
+        )
     }
 
     func copyImage(for item: CaptureItem) {
@@ -92,24 +126,119 @@ final class AppModel {
     }
 
     func saveImage(for item: CaptureItem) {
+        saveImage(for: item, format: .png)
+    }
+
+    func saveImage(for item: CaptureItem, format: CaptureExportFormat) {
         panelManager.commitEditing(for: item.id)
 
-        guard let pngData = AnnotationRenderer.pngData(item: item) else {
-            statusMessage = "Save failed: cannot export PNG"
+        guard let imageData = renderedImageData(for: item, format: format) else {
+            statusMessage = "Save failed: cannot export \(format.title)"
             return
         }
 
         let panel = NSSavePanel()
-        panel.allowedContentTypes = [.png]
-        panel.nameFieldStringValue = "PinShot-\(Int(item.createdAt.timeIntervalSince1970)).png"
+        panel.allowedContentTypes = [format.contentType]
+        panel.nameFieldStringValue = "\(CaptureHistoryFormatter.suggestedFileStem(for: item)).\(format.fileExtension)"
 
         if panel.runModal() == .OK, let url = panel.url {
             do {
-                try pngData.write(to: url)
-                statusMessage = "Image saved"
+                try imageData.write(to: url)
+                statusMessage = "\(format.title) saved"
             } catch {
                 statusMessage = "Save failed: \(error.localizedDescription)"
             }
+        }
+    }
+
+    func saveText(for item: CaptureItem, kind: CaptureTextExportKind) {
+        let text = kind.text(from: item).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, text != CaptureText.noTextRecognized else {
+            statusMessage = "No \(kind.title.lowercased()) to export"
+            return
+        }
+
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.plainText]
+        panel.nameFieldStringValue = "\(CaptureHistoryFormatter.suggestedFileStem(for: item))-\(kind.title.replacingOccurrences(of: " ", with: "-").lowercased()).txt"
+
+        if panel.runModal() == .OK, let url = panel.url {
+            do {
+                try text.write(to: url, atomically: true, encoding: .utf8)
+                statusMessage = "\(kind.title) saved"
+            } catch {
+                statusMessage = "Save failed: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    func exportCapturePackage(for item: CaptureItem) {
+        panelManager.commitEditing(for: item.id)
+
+        guard let pngData = renderedImageData(for: item, format: .png) else {
+            statusMessage = "Export failed: cannot build image package"
+            return
+        }
+
+        let panel = NSOpenPanel()
+        panel.prompt = "Export"
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.canCreateDirectories = true
+
+        guard panel.runModal() == .OK, let directoryURL = panel.url else {
+            return
+        }
+
+        let packageURL = uniqueExportDirectoryURL(
+            for: directoryURL.appendingPathComponent(
+                "\(CaptureHistoryFormatter.suggestedFileStem(for: item))-Package",
+                isDirectory: true
+            )
+        )
+
+        do {
+            try FileManager.default.createDirectory(
+                at: packageURL,
+                withIntermediateDirectories: true,
+                attributes: nil
+            )
+            try pngData.write(to: packageURL.appendingPathComponent("capture.png"))
+
+            if item.hasRecognizedText {
+                try item.recognizedText.write(
+                    to: packageURL.appendingPathComponent("ocr.txt"),
+                    atomically: true,
+                    encoding: .utf8
+                )
+            }
+
+            if item.hasTranslatedText {
+                try item.translatedText.write(
+                    to: packageURL.appendingPathComponent("translation.txt"),
+                    atomically: true,
+                    encoding: .utf8
+                )
+            }
+
+            let metadata = CapturePackageMetadata(
+                createdAt: item.createdAt,
+                title: CaptureHistoryFormatter.title(for: item.recognizedText, createdAt: item.createdAt),
+                recognizedTextAvailable: item.hasRecognizedText,
+                translatedTextAvailable: item.hasTranslatedText,
+                annotationCount: item.annotations.count,
+                zoom: item.zoom,
+                opacity: item.opacity
+            )
+            let metadataURL = packageURL.appendingPathComponent("metadata.json")
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            encoder.dateEncodingStrategy = .iso8601
+            try encoder.encode(metadata).write(to: metadataURL)
+
+            statusMessage = "Capture package exported"
+        } catch {
+            statusMessage = "Export failed: \(error.localizedDescription)"
         }
     }
 
@@ -249,6 +378,44 @@ final class AppModel {
         applyLaunchAtLoginPreference(userInitiated: true)
     }
 
+    func reopenSetupGuide() {
+        isShowingSetupGuide = true
+        statusMessage = "Setup guide reopened"
+    }
+
+    func completeSetupGuide() {
+        isShowingSetupGuide = false
+        preferences.markSetupGuideDismissed()
+        statusMessage = "Setup guide completed"
+    }
+
+    func skipSetupGuide() {
+        isShowingSetupGuide = false
+        preferences.markSetupGuideDismissed()
+        statusMessage = "Setup guide skipped — you can reopen it anytime"
+    }
+
+    func openSystemSettings(_ destination: SetupGuideDestination) {
+        guard let url = destination.url else {
+            statusMessage = "Cannot open \(destination.title)"
+            return
+        }
+
+        if NSWorkspace.shared.open(url) {
+            statusMessage = "Opened \(destination.title) settings"
+        } else {
+            statusMessage = "Could not open \(destination.title) settings"
+        }
+    }
+
+    func zoomIn(for item: CaptureItem) {
+        setZoom(item.zoom + 0.12, for: item)
+    }
+
+    func zoomOut(for item: CaptureItem) {
+        setZoom(item.zoom - 0.12, for: item)
+    }
+
     private func handleHotKeyRecording(_ event: NSEvent) {
         guard let configuration = HotKeyConfiguration.from(event: event) else {
             statusMessage = "Shortcut needs at least one modifier"
@@ -322,6 +489,12 @@ final class AppModel {
     private func capture(with id: UUID?) -> CaptureItem? {
         guard let id else { return nil }
         return captures.first(where: { $0.id == id })
+    }
+
+    private func matchesHistorySearch(_ item: CaptureItem) -> Bool {
+        let query = historySearchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !query.isEmpty else { return true }
+        return CaptureHistoryFormatter.searchableText(for: item).contains(query)
     }
 
     private func clampedZoom(_ zoom: Double) -> Double {
@@ -562,11 +735,71 @@ final class AppModel {
         return didWrite
     }
 
+    private func copyText(
+        _ text: String,
+        emptyMessage: String,
+        successMessage: String
+    ) {
+        let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty, value != CaptureText.noTextRecognized else {
+            statusMessage = emptyMessage
+            return
+        }
+
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+
+        if pasteboard.setString(value, forType: .string) {
+            statusMessage = successMessage
+        } else {
+            statusMessage = "Copy failed: could not write text to clipboard"
+        }
+    }
+
+    private func renderedImageData(for item: CaptureItem, format: CaptureExportFormat) -> Data? {
+        let outputImage = AnnotationRenderer.render(item: item) ?? item.image
+
+        switch format {
+        case .png:
+            return outputImage.pngData
+        case .jpeg:
+            return outputImage.jpegData
+        }
+    }
+
+    private func uniqueExportDirectoryURL(for proposedURL: URL) -> URL {
+        guard FileManager.default.fileExists(atPath: proposedURL.path) else {
+            return proposedURL
+        }
+
+        let directory = proposedURL.deletingLastPathComponent()
+        let name = proposedURL.lastPathComponent
+        var counter = 2
+
+        while true {
+            let candidate = directory.appendingPathComponent("\(name)-\(counter)", isDirectory: true)
+            if !FileManager.default.fileExists(atPath: candidate.path) {
+                return candidate
+            }
+            counter += 1
+        }
+    }
+
     private func updateCopyStatus(_ didCopy: Bool, successMessage: String) {
         statusMessage = didCopy
             ? successMessage
             : "Copy failed: could not write image to clipboard"
     }
+}
+
+private struct CapturePackageMetadata: Encodable {
+    let createdAt: Date
+    let title: String
+    let recognizedTextAvailable: Bool
+    let translatedTextAvailable: Bool
+    let annotationCount: Int
+    let zoom: Double
+    let opacity: Double
 }
 
 private enum CaptureMode {

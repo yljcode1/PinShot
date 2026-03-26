@@ -24,6 +24,19 @@ final class CaptureItem: Identifiable {
     var opacity: Double
     var zoom: Double
 
+    var hasRecognizedText: Bool {
+        let text = recognizedText.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !isRecognizingText && !text.isEmpty && text != CaptureText.noTextRecognized
+    }
+
+    var hasTranslatedText: Bool {
+        !translatedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isTranslating
+    }
+
+    var hasAnnotations: Bool {
+        !annotations.isEmpty
+    }
+
     init(
         image: NSImage,
         cgImage: CGImage,

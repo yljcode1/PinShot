@@ -21,4 +21,20 @@ extension NSImage {
         bitmap.size = size
         return bitmap.representation(using: .png, properties: [:])
     }
+
+    var jpegData: Data? {
+        if let cgImage {
+            let bitmap = NSBitmapImageRep(cgImage: cgImage)
+            bitmap.size = size
+            return bitmap.representation(using: .jpeg, properties: [.compressionFactor: 0.92])
+        }
+
+        guard let tiffRepresentation,
+              let bitmap = NSBitmapImageRep(data: tiffRepresentation) else {
+            return nil
+        }
+
+        bitmap.size = size
+        return bitmap.representation(using: .jpeg, properties: [.compressionFactor: 0.92])
+    }
 }
