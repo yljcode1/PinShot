@@ -185,6 +185,22 @@ enum QualityCheckRunner {
             failures: &failures
         )
 
+        let appKitSelection = CGRect(x: -240, y: 120, width: 320, height: 180)
+        let selectionRoundTrip = ScreenCoordinateConverter.quartzToAppKit(
+            ScreenCoordinateConverter.appKitToQuartz(appKitSelection)
+        )
+        CheckSupport.expect(
+            selectionRoundTrip.integral == appKitSelection.integral,
+            "Smart selection coordinates round-trip across screen coordinate systems",
+            failures: &failures
+        )
+        CheckSupport.expect(
+            CGRect(x: 10, y: 10, width: 1, height: 12).nonEmptySelection == nil &&
+                CGRect(x: 10, y: 10, width: 40, height: 12).nonEmptySelection != nil,
+            "Smart selection rejects empty drags and keeps valid regions",
+            failures: &failures
+        )
+
         let chooserOrigin = CaptureChooserLayout.origin(
             anchorPoint: CGPoint(x: 120, y: 10),
             visibleFrame: CGRect(x: 0, y: 0, width: 400, height: 320)
@@ -247,6 +263,11 @@ enum QualityCheckRunner {
             ]
         )
         CheckSupport.expect(mergedRegions.count == 2, "Nearby sensitive boxes merge into cleaner redaction regions", failures: &failures)
+        CheckSupport.expect(
+            SensitiveContentRedactionSupport.normalizedRegion(CGRect(x: 0.5, y: 0.5, width: 0, height: 0)) == nil,
+            "Empty sensitive regions are ignored before rendering",
+            failures: &failures
+        )
     }
 
     private static func runIntegrationChecks(failures: inout [String]) {
@@ -286,6 +307,13 @@ enum QualityCheckRunner {
             normalizedRect: CGRect(x: 0.72, y: 0.68, width: 0.5, height: 0.5)
         )
         CheckSupport.expect(mosaicImage != nil, "Mosaic renderer produces an image for a clamped selection", failures: &failures)
+
+        let invalidMosaicImage = MosaicRenderer.makeImage(
+            baseCGImage: fixture.cgImage,
+            normalizedRect: CGRect(x: 1.2, y: 1.2, width: 0.001, height: 0.001)
+        )
+        CheckSupport.expect(invalidMosaicImage == nil, "Mosaic renderer safely rejects empty or out-of-bounds selections", failures: &failures)
+
         CheckSupport.expect((mosaicImage?.width ?? 0) > 0 && (mosaicImage?.height ?? 0) > 0, "Mosaic renderer output has valid dimensions", failures: &failures)
 
         let jpegData = (AnnotationRenderer.render(item: item) ?? fixture.image).jpegData

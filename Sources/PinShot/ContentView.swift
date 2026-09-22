@@ -491,7 +491,29 @@ private struct HistoryRow: View {
                     .buttonStyle(ToolIconButtonStyle())
                 }
 
+                Button {
+                    appModel.copySafelyRedactedImage(for: item)
+                } label: {
+                    Image(systemName: item.hasSmartRedactions ? "doc.on.doc.fill" : "checkmark.shield")
+                }
+                .disabled(item.isDetectingSensitiveContent)
+                .help(item.hasSmartRedactions ? "Copy with reviewed masks" : "Prepare a safe copy")
+                .buttonStyle(ToolIconButtonStyle())
+
                 Menu {
+                    if item.hasSmartRedactions {
+                        Section("Safe Export") {
+                            Button("Save Safe PNG") {
+                                appModel.saveSafelyRedactedImage(for: item, format: .png)
+                            }
+                            Button("Save Safe JPEG") {
+                                appModel.saveSafelyRedactedImage(for: item, format: .jpeg)
+                            }
+                        }
+
+                        Divider()
+                    }
+
                     Button("Save PNG") {
                         appModel.saveImage(for: item, format: .png)
                     }

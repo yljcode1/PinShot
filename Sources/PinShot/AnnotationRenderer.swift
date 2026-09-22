@@ -3,7 +3,11 @@ import AppKit
 @MainActor
 enum AnnotationRenderer {
     static func render(item: CaptureItem) -> NSImage? {
-        guard let bitmap = renderBitmap(item: item) else {
+        render(item: item, annotations: item.annotations)
+    }
+
+    static func render(item: CaptureItem, annotations: [ImageAnnotation]) -> NSImage? {
+        guard let bitmap = renderBitmap(item: item, annotations: annotations) else {
             return item.image
         }
 
@@ -13,10 +17,13 @@ enum AnnotationRenderer {
     }
 
     static func pngData(item: CaptureItem) -> Data? {
-        renderBitmap(item: item)?.representation(using: .png, properties: [:])
+        renderBitmap(item: item, annotations: item.annotations)?.representation(using: .png, properties: [:])
     }
 
-    private static func renderBitmap(item: CaptureItem) -> NSBitmapImageRep? {
+    private static func renderBitmap(
+        item: CaptureItem,
+        annotations: [ImageAnnotation]
+    ) -> NSBitmapImageRep? {
         let pixelSize = pixelSize(for: item.image)
         let canvasSize = item.image.size
         guard pixelSize.width > 0, pixelSize.height > 0 else {
@@ -60,7 +67,7 @@ enum AnnotationRenderer {
             fraction: 1
         )
 
-        for annotation in item.annotations {
+        for annotation in annotations {
             draw(annotation: annotation, inCanvasSize: canvasSize, baseCGImage: item.cgImage)
         }
 

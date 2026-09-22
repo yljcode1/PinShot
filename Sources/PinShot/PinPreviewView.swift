@@ -120,12 +120,6 @@ struct PinPreviewView: View {
                     .blur(radius: 2.5)
             }
         }
-        .overlay(alignment: .topTrailing) {
-            if isSelected {
-                floatingSurfaceControls
-                    .padding(8)
-            }
-        }
         .shadow(
             color: isSelected ? .black.opacity(0.16) : .black.opacity(0.10),
             radius: isSelected ? 4 : 6
@@ -146,6 +140,12 @@ struct PinPreviewView: View {
                         appModel.toggleToolbar(for: item)
                     }
                 )
+            }
+        }
+        .overlay(alignment: .topTrailing) {
+            if isSelected {
+                floatingSurfaceControls
+                    .padding(8)
             }
         }
         .aspectRatio(captureAspectRatio, contentMode: .fit)
@@ -244,25 +244,43 @@ struct PinPreviewView: View {
                 }
 
                 ToolbarGroupCard(title: "Smart") {
-                    Button {
-                        appModel.applySmartRedaction(for: item)
-                    } label: {
-                        Label(
-                            item.isDetectingSensitiveContent
-                                ? "Scanning..."
-                                : (item.smartRedactionCount > 0 ? "Redo Mask" : "Smart Mask"),
-                            systemImage: item.isDetectingSensitiveContent
-                                ? "hourglass"
-                                : (item.smartRedactionCount > 0 ? "eye.slash.fill" : "eye.slash")
+                    VStack(spacing: 8) {
+                        Button {
+                            appModel.copySafelyRedactedImage(for: item)
+                        } label: {
+                            Label(
+                                item.isDetectingSensitiveContent
+                                    ? "Scanning..."
+                                    : (item.hasSmartRedactions ? "Copy Safe" : "Prepare Safe Copy"),
+                                systemImage: item.isDetectingSensitiveContent
+                                    ? "hourglass"
+                                    : (item.hasSmartRedactions ? "doc.on.doc.fill" : "checkmark.shield")
+                            )
+                        }
+                        .buttonStyle(PinCapsuleButtonStyle(prominence: .primary))
+                        .disabled(item.isDetectingSensitiveContent)
+                        .help(
+                            item.hasSmartRedactions
+                                ? "Copy the image with the reviewed masks"
+                                : "Detect sensitive content and show masks for review before copying"
                         )
+
+                        Button {
+                            appModel.applySmartRedaction(for: item)
+                        } label: {
+                            Label(
+                                item.smartRedactionCount > 0 ? "Redo Mask" : "Smart Mask",
+                                systemImage: item.smartRedactionCount > 0 ? "eye.slash.fill" : "eye.slash"
+                            )
+                        }
+                        .buttonStyle(
+                            PinCapsuleButtonStyle(
+                                prominence: item.smartRedactionCount > 0 ? .primary : .secondary
+                            )
+                        )
+                        .disabled(item.isDetectingSensitiveContent)
+                        .help("Detect sensitive content and add editable mosaic masks")
                     }
-                    .buttonStyle(
-                        PinCapsuleButtonStyle(
-                            prominence: item.smartRedactionCount > 0 ? .primary : .secondary
-                        )
-                    )
-                    .disabled(item.isDetectingSensitiveContent)
-                    .help("Detect phone numbers, emails, links, IDs, and QR codes, then add mosaic masks")
                 }
 
                 ToolbarGroupCard(title: "Actions") {
@@ -292,6 +310,19 @@ struct PinPreviewView: View {
                         .help("Copy image including annotations")
 
                         Menu {
+                            if item.hasSmartRedactions {
+                                Section("Safe Export") {
+                                    Button("Save Safe PNG") {
+                                        appModel.saveSafelyRedactedImage(for: item, format: .png)
+                                    }
+                                    Button("Save Safe JPEG") {
+                                        appModel.saveSafelyRedactedImage(for: item, format: .jpeg)
+                                    }
+                                }
+
+                                Divider()
+                            }
+
                             Button("Save PNG") {
                                 appModel.saveImage(for: item, format: .png)
                             }
@@ -699,6 +730,21 @@ struct PinPreviewView: View {
 
         Button("Copy Image") {
             appModel.copyImage(for: item)
+        }
+
+        Button("Copy Safe Image") {
+            appModel.copySafelyRedactedImage(for: item)
+        }
+        .disabled(item.isDetectingSensitiveContent)
+
+        if item.hasSmartRedactions {
+            Button("Save Safe PNG") {
+                appModel.saveSafelyRedactedImage(for: item, format: .png)
+            }
+
+            Button("Save Safe JPEG") {
+                appModel.saveSafelyRedactedImage(for: item, format: .jpeg)
+            }
         }
 
         Button("Save PNG") {

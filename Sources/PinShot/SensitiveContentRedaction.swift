@@ -120,7 +120,9 @@ enum SensitiveContentRedactionSupport {
         var merged: [CGRect] = []
 
         for rect in rects {
-            var candidate = clamp(rect.insetBy(dx: -padding.width, dy: -padding.height))
+            guard var candidate = normalizedRegion(rect.insetBy(dx: -padding.width, dy: -padding.height)) else {
+                continue
+            }
             var mergedExisting = true
 
             while mergedExisting {
@@ -129,7 +131,10 @@ enum SensitiveContentRedactionSupport {
                 for index in merged.indices.reversed() {
                     let existing = merged[index]
                     if shouldMerge(existing, candidate, proximity: proximity) {
-                        candidate = clamp(existing.union(candidate))
+                        guard let mergedCandidate = normalizedRegion(existing.union(candidate)) else {
+                            continue
+                        }
+                        candidate = mergedCandidate
                         merged.remove(at: index)
                         mergedExisting = true
                     }
@@ -139,12 +144,24 @@ enum SensitiveContentRedactionSupport {
             merged.append(candidate)
         }
 
-        return merged.sorted {
+        return merged.compactMap { normalizedRegion($0, minimumNormalizedEdge: 0.004) }.sorted {
             if abs($0.minY - $1.minY) > 0.0001 {
                 return $0.minY > $1.minY
             }
             return $0.minX < $1.minX
         }
+    }
+
+    static func normalizedRegion(
+        _ rect: CGRect,
+        minimumNormalizedEdge: CGFloat = 0.0015
+    ) -> CGRect? {
+        let clamped = clamp(rect.standardized)
+        guard clamped.width >= minimumNormalizedEdge,
+              clamped.height >= minimumNormalizedEdge else {
+            return nil
+        }
+        return clamped
     }
 
     private static func deduplicated(_ candidates: [MatchCandidate]) -> [MatchCandidate] {
@@ -234,7 +251,17 @@ final class SensitiveContentRedactionService: @unchecked Sendable {
         async let barcodeDetections = detectQRCodes(in: cgImage)
 
         let allDetections = await textDetections + barcodeDetections
-        let mergedRegions = SensitiveContentRedactionSupport.mergedRegions(from: allDetections.map(\.rect))
+        let minimumWidth = 3 / max(CGFloat(cgImage.width), 1)
+        let minimumHeight = 3 / max(CGFloat(cgImage.height), 1)
+        let normalizedRects = allDetections.compactMap { detection in
+            SensitiveContentRedactionSupport.normalizedRegion(
+                detection.rect,
+                minimumNormalizedEdge: min(minimumWidth, minimumHeight)
+            )
+        }
+        let mergedRegions = SensitiveContentRedactionSupport.mergedRegions(from: normalizedRects).filter {
+            $0.width >= minimumWidth && $0.height >= minimumHeight
+        }
         return SensitiveRedactionScanResult(
             regions: mergedRegions,
             kinds: Set(allDetections.map(\.kind))
@@ -254,11 +281,12 @@ final class SensitiveContentRedactionService: @unchecked Sendable {
 
                     for match in SensitiveContentRedactionSupport.matches(in: candidate.string) {
                         guard let range = Range(match.range, in: candidate.string),
-                              let rectangle = try? candidate.boundingBox(for: range) else {
+                              let rectangle = try? candidate.boundingBox(for: range),
+                              let rect = SensitiveContentRedactionSupport.normalizedRegion(rectangle.boundingBox) else {
                             continue
                         }
 
-                        detections.append(Detection(kind: match.kind, rect: rectangle.boundingBox))
+                        detections.append(Detection(kind: match.kind, rect: rect))
                     }
                 }
 
@@ -285,9 +313,14 @@ final class SensitiveContentRedactionService: @unchecked Sendable {
         await withCheckedContinuation { continuation in
             let request = VNDetectBarcodesRequest { request, _ in
                 let observations = request.results as? [VNBarcodeObservation] ?? []
-                let detections = observations
+                let detections: [Detection] = observations
                     .filter { $0.symbology == .qr }
-                    .map { Detection(kind: .qrCode, rect: $0.boundingBox) }
+                    .compactMap { observation in
+                        guard let rect = SensitiveContentRedactionSupport.normalizedRegion(observation.boundingBox) else {
+                            return nil
+                        }
+                        return Detection(kind: .qrCode, rect: rect)
+                    }
                 continuation.resume(returning: detections)
             }
 
