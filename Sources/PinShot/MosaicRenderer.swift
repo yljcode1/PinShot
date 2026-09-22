@@ -24,14 +24,16 @@ enum MosaicRenderer {
 
         guard clamped.width > 0.0001, clamped.height > 0.0001 else { return nil }
 
-        let cropRect = CGRect(
+        let requestedCropRect = CGRect(
             x: clamped.minX * CGFloat(baseCGImage.width),
             y: clamped.minY * CGFloat(baseCGImage.height),
             width: clamped.width * CGFloat(baseCGImage.width),
             height: clamped.height * CGFloat(baseCGImage.height)
-        ).integral
+        )
+        let imageBounds = CGRect(x: 0, y: 0, width: baseCGImage.width, height: baseCGImage.height)
+        let cropRect = requestedCropRect.integral.intersection(imageBounds)
 
-        guard cropRect.width >= 2, cropRect.height >= 2 else { return nil }
+        guard !cropRect.isNull, cropRect.width >= 2, cropRect.height >= 2 else { return nil }
 
         let ciImage = CIImage(cgImage: baseCGImage).cropped(to: cropRect)
         let filter = CIFilter.pixellate()

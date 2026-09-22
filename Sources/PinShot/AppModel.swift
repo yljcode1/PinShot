@@ -126,11 +126,98 @@ final class AppModel {
         updateCopyStatus(copyImageToPasteboard(outputImage), successMessage: "Screenshot copied to clipboard")
     }
 
+    func copySafelyRedactedImage(for item: CaptureItem) {
+        guard !item.isDetectingSensitiveContent else {
+            statusMessage = "Sensitive-content scan is already running"
+            return
+        }
+
+        if item.hasSmartRedactions {
+            panelManager.commitEditing(for: item.id)
+            let outputImage = AnnotationRenderer.render(item: item) ?? item.image
+            updateCopyStatus(
+                copyImageToPasteboard(outputImage),
+                successMessage: "Safe copy ready — reviewed masks included"
+            )
+            return
+        }
+
+        panelManager.commitEditing(for: item.id)
+        item.isDetectingSensitiveContent = true
+        refreshCapture(item)
+        statusMessage = "Scanning and preparing a safely redacted copy"
+
+        let service = sensitiveContentRedactionService
+        let cgImage = item.cgImage
+
+        Task { [weak self] in
+            let result = await service.detectRegions(in: cgImage)
+
+            await MainActor.run { [weak self] in
+                guard let self,
+                      self.captures.contains(where: { $0.id == item.id }) else {
+                    return
+                }
+
+                item.isDetectingSensitiveContent = false
+                let detectedMasks = result.regions.map { rect in
+                    ImageAnnotation(
+                        kind: .mosaic(rect: rect),
+                        color: .yellow,
+                        lineWidth: 4,
+                        source: .smartRedaction
+                    )
+                }
+                item.annotations.removeAll { $0.source == .smartRedaction }
+                item.annotations.append(contentsOf: detectedMasks)
+                item.showToolbar = true
+
+                self.refreshCapture(item)
+                if detectedMasks.isEmpty {
+                    let outputImage = AnnotationRenderer.render(item: item) ?? item.image
+                    self.updateCopyStatus(
+                        self.copyImageToPasteboard(outputImage),
+                        successMessage: "Safe copy ready — no sensitive content found"
+                    )
+                    return
+                }
+
+                self.statusMessage = self.safeCopyReviewStatusMessage(
+                    kinds: result.kinds,
+                    maskCount: detectedMasks.count
+                )
+            }
+        }
+    }
+
     func saveImage(for item: CaptureItem) {
         saveImage(for: item, format: .png)
     }
 
     func saveImage(for item: CaptureItem, format: CaptureExportFormat) {
+        saveImage(for: item, format: format, filenameSuffix: "", successMessage: "\(format.title) saved")
+    }
+
+    func saveSafelyRedactedImage(for item: CaptureItem, format: CaptureExportFormat) {
+        guard item.hasSmartRedactions else {
+            statusMessage = "Prepare and review sensitive-content masks before safe export"
+            return
+        }
+
+        saveImage(
+            for: item,
+            format: format,
+            filenameSuffix: "-redacted",
+            successMessage: "Safe \(format.title) saved with reviewed masks"
+        )
+    }
+
+    private func saveImage(
+        for item: CaptureItem,
+        format: CaptureExportFormat,
+        filenameSuffix: String,
+        successMessage: String
+    ) {
         panelManager.commitEditing(for: item.id)
 
         guard let imageData = renderedImageData(for: item, format: format) else {
@@ -140,12 +227,12 @@ final class AppModel {
 
         let panel = NSSavePanel()
         panel.allowedContentTypes = [format.contentType]
-        panel.nameFieldStringValue = "\(CaptureHistoryFormatter.suggestedFileStem(for: item)).\(format.fileExtension)"
+        panel.nameFieldStringValue = "\(CaptureHistoryFormatter.suggestedFileStem(for: item))\(filenameSuffix).\(format.fileExtension)"
 
         if panel.runModal() == .OK, let url = panel.url {
             do {
                 try imageData.write(to: url)
-                statusMessage = "\(format.title) saved"
+                statusMessage = successMessage
             } catch {
                 statusMessage = "Save failed: \(error.localizedDescription)"
             }
@@ -857,6 +944,20 @@ final class AppModel {
         }
 
         return "Smart redaction added \(maskCount) mask\(maskCount == 1 ? "" : "s") for \(summary)"
+    }
+
+    private func safeCopyReviewStatusMessage(
+        kinds: Set<SensitiveContentKind>,
+        maskCount: Int
+    ) -> String {
+        let summary = kinds
+            .map(\.title)
+            .sorted()
+            .prefix(3)
+            .joined(separator: ", ")
+
+        let suffix = summary.isEmpty ? "" : " (\(summary))"
+        return "Review \(maskCount) detected item\(maskCount == 1 ? "" : "s")\(suffix), then click Copy Safe again"
     }
 }
 

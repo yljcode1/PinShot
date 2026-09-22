@@ -50,7 +50,7 @@ struct AnnotationColor: Equatable {
     static let yellow = AnnotationColor(red: 0.98, green: 0.78, blue: 0.10, alpha: 1)
     static let green = AnnotationColor(red: 0.17, green: 0.72, blue: 0.36, alpha: 1)
 
-    static let presets: [AnnotationColor] = [.red, .blue]
+    static let presets: [AnnotationColor] = [.red, .blue, .yellow, .green]
 }
 
 struct ImageAnnotation: Identifiable, Equatable {

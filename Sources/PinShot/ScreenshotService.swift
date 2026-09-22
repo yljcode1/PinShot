@@ -23,54 +23,48 @@ enum ScreenshotError: LocalizedError {
 
 @MainActor
 final class ScreenshotService {
+    private let selectionService = SmartSelectionOverlayService()
+
     func captureUserSelection() async throws -> CapturedSelection? {
-        try await captureUsingSystemSelection()
-    }
-
-    private func captureUsingSystemSelection() async throws -> CapturedSelection? {
-        let temporaryURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("PinShot-\(UUID().uuidString).png")
-        let selectionTracker = SelectionGeometryTracker()
-        let initialMouseLocation = NSEvent.mouseLocation
-        let initialScreen = NSScreen.screens.first(where: { $0.frame.contains(initialMouseLocation) }) ?? NSScreen.main
-
-        defer {
-            try? FileManager.default.removeItem(at: temporaryURL)
-        }
-
-        selectionTracker.start()
-        let terminationStatus = try await runSystemSelectionCapture(to: temporaryURL)
-        let trackedRect = selectionTracker.finish()
-
-        guard terminationStatus == 0,
-              FileManager.default.fileExists(atPath: temporaryURL.path) else {
+        guard let appKitRect = await selectionService.selectRegion() else {
             return nil
         }
+        return try await capture(rect: appKitRect)
+    }
 
-        guard let image = NSImage(contentsOf: temporaryURL),
-              let cgImage = image.cgImage else {
+    private func capture(rect appKitRect: CGRect) async throws -> CapturedSelection {
+        let temporaryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PinShot-\(UUID().uuidString).png")
+        defer { try? FileManager.default.removeItem(at: temporaryURL) }
+
+        try? await Task.sleep(for: .milliseconds(80))
+        let quartzRect = ScreenCoordinateConverter.appKitToQuartz(appKitRect).integral
+        let status = try await runRegionCapture(rect: quartzRect, to: temporaryURL)
+
+        guard status == 0, FileManager.default.fileExists(atPath: temporaryURL.path) else {
+            throw ScreenshotError.captureFailed
+        }
+        guard let image = NSImage(contentsOf: temporaryURL), let cgImage = image.cgImage else {
             throw ScreenshotError.imageLoadFailed
         }
 
-        let resolvedRect = trackedRect ?? CapturePlacementResolver.inferredRect(
-            imagePixelSize: CGSize(width: cgImage.width, height: cgImage.height),
-            initialMouseLocation: initialMouseLocation,
-            screenVisibleFrame: initialScreen?.visibleFrame,
-            screenScale: initialScreen?.backingScaleFactor ?? 1
+        return CapturedSelection(
+            image: NSImage(cgImage: cgImage, size: appKitRect.size),
+            cgImage: cgImage,
+            appKitRect: appKitRect
         )
-        let sizedImage = NSImage(cgImage: cgImage, size: resolvedRect.size)
-        return CapturedSelection(image: sizedImage, cgImage: cgImage, appKitRect: resolvedRect)
     }
 
-    private func runSystemSelectionCapture(to temporaryURL: URL) async throws -> Int32 {
+    private func runRegionCapture(rect: CGRect, to url: URL) async throws -> Int32 {
         try await withCheckedThrowingContinuation { continuation in
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
-            process.arguments = ["-i", "-s", "-x", temporaryURL.path]
-            process.terminationHandler = { process in
-                continuation.resume(returning: process.terminationStatus)
-            }
-
+            process.arguments = [
+                "-x",
+                "-R\(Int(rect.minX)),\(Int(rect.minY)),\(Int(rect.width)),\(Int(rect.height))",
+                url.path
+            ]
+            process.terminationHandler = { continuation.resume(returning: $0.terminationStatus) }
             do {
                 try process.run()
             } catch {
@@ -80,74 +74,22 @@ final class ScreenshotService {
     }
 }
 
-@MainActor
-private final class SelectionGeometryTracker {
-    private var pollingTask: Task<Void, Never>?
-    private var dragStartPoint: CGPoint?
-    private var trackedRect: CGRect?
-    private var didFinishDrag = false
+enum ScreenCoordinateConverter {
+    static var primaryScreenTop: CGFloat { NSScreen.screens.first?.frame.maxY ?? 0 }
 
-    func start() {
-        finish()
-        didFinishDrag = false
-
-        pollingTask = Task { @MainActor [weak self] in
-            guard let self else { return }
-            while !Task.isCancelled {
-                sampleMouseState()
-                try? await Task.sleep(for: .milliseconds(8))
-            }
-        }
+    static func appKitToQuartz(_ rect: CGRect) -> CGRect {
+        CGRect(x: rect.minX, y: primaryScreenTop - rect.maxY, width: rect.width, height: rect.height)
     }
 
-    @discardableResult
-    func finish() -> CGRect? {
-        pollingTask?.cancel()
-        pollingTask = nil
-
-        defer {
-            dragStartPoint = nil
-            trackedRect = nil
-            didFinishDrag = false
-        }
-
-        return trackedRect?.standardized.nonEmpty
-    }
-
-    private func sampleMouseState() {
-        guard !didFinishDrag else { return }
-
-        let point = NSEvent.mouseLocation
-        let isLeftMouseDown = CGEventSource.buttonState(.combinedSessionState, button: .left)
-
-        if isLeftMouseDown {
-            if dragStartPoint == nil {
-                dragStartPoint = point
-                trackedRect = CGRect(origin: point, size: .zero)
-            }
-            updateTrackedRect(with: point)
-            return
-        }
-
-        guard dragStartPoint != nil else { return }
-        updateTrackedRect(with: point)
-        didFinishDrag = true
-    }
-
-    private func updateTrackedRect(with point: CGPoint) {
-        guard let dragStartPoint else { return }
-        trackedRect = CGRect(
-            x: min(dragStartPoint.x, point.x),
-            y: min(dragStartPoint.y, point.y),
-            width: abs(point.x - dragStartPoint.x),
-            height: abs(point.y - dragStartPoint.y)
-        )
+    static func quartzToAppKit(_ rect: CGRect) -> CGRect {
+        CGRect(x: rect.minX, y: primaryScreenTop - rect.maxY, width: rect.width, height: rect.height)
     }
 }
 
-private extension CGRect {
-    var nonEmpty: CGRect? {
-        guard width > 1, height > 1 else { return nil }
-        return self
+extension CGRect {
+    var nonEmptySelection: CGRect? {
+        let value = standardized
+        guard value.width > 1, value.height > 1 else { return nil }
+        return value
     }
 }
