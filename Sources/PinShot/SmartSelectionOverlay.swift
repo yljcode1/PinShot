@@ -51,9 +51,12 @@ private final class SmartSelectionSession {
             )
             let view = SmartSelectionView(frame: CGRect(origin: .zero, size: screen.frame.size))
             view.screenFrame = screen.frame
-            view.onHover = { [weak self] in self?.updateHover(at: $0) }
+            view.onHover = { [weak self] point, smartSelectionEnabled in
+                self?.updateHover(at: point, smartSelectionEnabled: smartSelectionEnabled)
+            }
             view.onDrag = { [weak self] in self?.updateManualSelection($0) }
             view.onComplete = { [weak self] in self?.complete($0) }
+            view.onSmartClick = { [weak self] in self?.completeSmartSelection(at: $0) }
             view.onCancel = { [weak self] in self?.finish(nil) }
             view.onCycleCandidate = { [weak self] in self?.cycleCandidate() }
             view.onAcceptCandidate = { [weak self] in self?.complete(self?.activeRect) }
@@ -70,12 +73,28 @@ private final class SmartSelectionSession {
             panel.orderFrontRegardless()
         }
 
+        NSApp.activate(ignoringOtherApps: true)
         let mouse = NSEvent.mouseLocation
-        (panels.first { $0.frame.contains(mouse) } ?? panels.first)?.makeKey()
-        updateHover(at: mouse)
+        (panels.first { $0.frame.contains(mouse) } ?? panels.first)?.makeKeyAndOrderFront(nil)
+        updateHover(at: mouse, smartSelectionEnabled: false)
     }
 
-    private func updateHover(at point: CGPoint) {
+    private func completeSmartSelection(at point: CGPoint) {
+        candidates = detector.candidates(at: point)
+        candidateIndex = 0
+        activeRect = candidates.first
+        updateViews(isManual: false)
+        complete(activeRect)
+    }
+
+    private func updateHover(at point: CGPoint, smartSelectionEnabled: Bool) {
+        guard smartSelectionEnabled else {
+            candidates = []
+            candidateIndex = 0
+            activeRect = nil
+            updateViews(isManual: false)
+            return
+        }
         candidates = detector.candidates(at: point)
         candidateIndex = 0
         activeRect = candidates.first
@@ -83,7 +102,10 @@ private final class SmartSelectionSession {
     }
 
     private func cycleCandidate() {
-        guard !candidates.isEmpty else { return }
+        if candidates.isEmpty {
+            updateHover(at: NSEvent.mouseLocation, smartSelectionEnabled: true)
+            return
+        }
         candidateIndex = (candidateIndex + 1) % candidates.count
         activeRect = candidates[candidateIndex]
         updateViews(isManual: false)
@@ -128,9 +150,10 @@ private final class SmartSelectionView: NSView {
     var screenFrame: CGRect = .zero
     var selectionRect: CGRect?
     var isManualSelection = false
-    var onHover: ((CGPoint) -> Void)?
+    var onHover: ((CGPoint, Bool) -> Void)?
     var onDrag: ((CGRect?) -> Void)?
     var onComplete: ((CGRect?) -> Void)?
+    var onSmartClick: ((CGPoint) -> Void)?
     var onCancel: (() -> Void)?
     var onCycleCandidate: (() -> Void)?
     var onAcceptCandidate: (() -> Void)?
@@ -139,6 +162,7 @@ private final class SmartSelectionView: NSView {
     private var dragStart: CGPoint?
     private var latestPoint: CGPoint?
     private var didDrag = false
+    private var smartClickArmed = false
 
     override var acceptsFirstResponder: Bool { true }
     override var isOpaque: Bool { false }
@@ -162,12 +186,25 @@ private final class SmartSelectionView: NSView {
 
     override func mouseMoved(with event: NSEvent) {
         guard dragStart == nil else { return }
-        onHover?(globalPoint(for: event))
+        onHover?(globalPoint(for: event), event.modifierFlags.contains(.option))
+    }
+
+    override func flagsChanged(with event: NSEvent) {
+        guard dragStart == nil else { return }
+        onHover?(NSEvent.mouseLocation, event.modifierFlags.contains(.option))
     }
 
     override func mouseDown(with event: NSEvent) {
         window?.makeKey()
         let point = globalPoint(for: event)
+        if event.modifierFlags.contains(.option) {
+            // Refresh at click time as modifier changes are not guaranteed to
+            // produce a mouse-move event before the user clicks.
+            onHover?(point, true)
+            smartClickArmed = true
+        } else {
+            smartClickArmed = false
+        }
         dragStart = point
         latestPoint = point
         didDrag = false
@@ -180,14 +217,17 @@ private final class SmartSelectionView: NSView {
         let rect = selection(from: dragStart, to: point)
         if rect.width > 3 || rect.height > 3 {
             didDrag = true
+            smartClickArmed = false
             onDrag?(rect)
         }
     }
 
     override func mouseUp(with event: NSEvent) {
-        defer { dragStart = nil; latestPoint = nil; didDrag = false }
+        defer { dragStart = nil; latestPoint = nil; didDrag = false; smartClickArmed = false }
         if didDrag, let dragStart {
             onComplete?(selection(from: dragStart, to: latestPoint ?? globalPoint(for: event)))
+        } else if smartClickArmed {
+            onSmartClick?(globalPoint(for: event))
         } else {
             onComplete?(selectionRect)
         }
@@ -210,7 +250,7 @@ private final class SmartSelectionView: NSView {
         dirtyRect.fill()
 
         guard let globalRect = selectionRect else {
-            drawHint("移动识别 · 拖拽框选 · Esc 或再次按快捷键取消", at: CGPoint(x: 24, y: 24))
+            drawHint("拖拽框选 · 按住 Option 智能识别 · Esc 或再次按快捷键取消", at: CGPoint(x: 24, y: 24))
             return
         }
         let localRect = CGRect(
@@ -235,7 +275,7 @@ private final class SmartSelectionView: NSView {
         let size = "\(Int(globalRect.width)) × \(Int(globalRect.height))"
         let hint = isManualSelection
             ? "\(size) · 松开鼠标截图"
-            : "\(size) · 单击截图 · Tab 切换父级 · 拖拽自由框选 · Esc 取消"
+            : "\(size) · 单击智能截图 · Tab 切换父级 · 拖拽自由框选"
         drawHint(hint, at: CGPoint(x: localRect.minX, y: max(10, localRect.minY - 28)))
     }
 
