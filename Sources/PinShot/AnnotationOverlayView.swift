@@ -773,7 +773,7 @@ final class AnnotationDrawingView: NSView, NSTextFieldDelegate {
                 drewMosaic = true
             }
             if !drewMosaic {
-                context.setFillColor(NSColor.black.withAlphaComponent(0.25).cgColor)
+                context.setFillColor(NSColor.black.cgColor)
                 context.fill(frame)
             }
             context.setStrokeColor(NSColor.white.withAlphaComponent(0.9).cgColor)

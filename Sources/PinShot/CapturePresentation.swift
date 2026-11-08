@@ -58,6 +58,9 @@ enum CaptureHistoryFormatter {
 
     @MainActor
     static func suggestedFileStem(for item: CaptureItem) -> String {
+        if item.hasMosaic {
+            return "PinShot-\(Int(item.createdAt.timeIntervalSince1970))"
+        }
         let title = title(for: item.recognizedText, createdAt: item.createdAt)
         let cleaned = title
             .replacingOccurrences(of: "/", with: "-")
@@ -209,9 +212,11 @@ enum CapturePlacementResolver {
         )
 
         let layoutFrame = screenVisibleFrame ?? CGRect(origin: .zero, size: naturalSize)
+        let fit = min(1, layoutFrame.width / max(naturalSize.width, 1),
+                      layoutFrame.height / max(naturalSize.height, 1))
         let size = CGSize(
-            width: min(naturalSize.width, layoutFrame.width),
-            height: min(naturalSize.height, layoutFrame.height)
+            width: naturalSize.width * fit,
+            height: naturalSize.height * fit
         )
         var origin = CGPoint(
             x: initialMouseLocation.x - size.width / 2,
@@ -258,6 +263,15 @@ enum CaptureChooserLayout {
 }
 
 enum PinPanelLayout {
+    static func clampedFrame(_ frame: CGRect, within visibleFrame: CGRect) -> CGRect {
+        CGRect(
+            x: min(max(frame.minX, visibleFrame.minX), max(visibleFrame.minX, visibleFrame.maxX - frame.width)),
+            y: min(max(frame.minY, visibleFrame.minY), max(visibleFrame.minY, visibleFrame.maxY - frame.height)),
+            width: frame.width,
+            height: frame.height
+        )
+    }
+
     static func preferredSize(
         originalRect: CGRect,
         zoom: Double,
@@ -273,7 +287,7 @@ enum PinPanelLayout {
         let requestedWidth = originalRect.width * zoom
         let toolbarHeight: CGFloat
         if showToolbar {
-            toolbarHeight = requestedWidth < 360 ? 42 : 58
+            toolbarHeight = requestedWidth < 360 ? 46 : 58
         } else {
             toolbarHeight = 0
         }
@@ -291,7 +305,8 @@ enum PinPanelLayout {
         let heightRatio = availableImageHeight / max(requestedHeight, 1)
         let fitScale = min(1, widthRatio, heightRatio)
 
-        let width = max(minWidth, requestedWidth * fitScale)
+        let controlsWidth: CGFloat = showInspector ? 320 : (showToolbar ? 176 : minWidth)
+        let width = min(maxWidth, max(controlsWidth, requestedWidth * fitScale))
         let height = max(
             minHeight,
             requestedHeight * fitScale + toolbarHeight + inspectorHeight + toolbarSpacing + inspectorSpacing

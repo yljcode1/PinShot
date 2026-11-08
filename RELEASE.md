@@ -10,6 +10,7 @@
    - `rm -rf PinShot.app && mkdir -p PinShot.app/Contents/{MacOS,Resources}`
    - `install -m 755 .build/release/PinShot PinShot.app/Contents/MacOS/PinShot`
    - `cp Support/Info.plist PinShot.app/Contents/Info.plist`
+   - For local installs, select the same Apple Development identity on each update (`security find-identity -v -p codesigning`), then run `codesign --force --sign "$PINSHOT_SIGN_IDENTITY" PinShot.app` with that identity set. Verify with `codesign --verify --strict PinShot.app`. Do not replace a signed installation with an ad-hoc build: screen recording approval may no longer match.
    - `PinShot.app/Contents/MacOS/PinShot --all-checks`
    - Run `open PinShot.app` to verify hotkey, OCR, translation.
 

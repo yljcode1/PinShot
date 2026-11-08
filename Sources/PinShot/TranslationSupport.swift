@@ -9,21 +9,27 @@ struct TranslationPlan {
 
 enum TranslationSupport {
     static var isRuntimeSupported: Bool {
+#if canImport(Translation) && canImport(_Translation_SwiftUI)
         if #available(macOS 15, *) {
             return true
         }
+#endif
 
         return false
     }
 
     static let unavailableMessage = "Translation requires macOS 15 or later"
 
-    static func plan(for text: String) -> TranslationPlan? {
+    static func plan(for text: String, englishToChinese: Bool = false) -> TranslationPlan? {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, trimmed != CaptureText.noTextRecognized else {
             return nil
         }
 
+        if englishToChinese {
+            return TranslationPlan(sourceLanguageIdentifier: "en", targetLanguageIdentifier: "zh-Hans",
+                                   label: "English -> Chinese (Simplified)")
+        }
         let recognizer = NLLanguageRecognizer()
         recognizer.processString(trimmed)
         let detectedLanguage = recognizer.dominantLanguage

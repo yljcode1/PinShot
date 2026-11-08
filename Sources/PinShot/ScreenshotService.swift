@@ -8,13 +8,16 @@ struct CapturedSelection {
 }
 
 enum ScreenshotError: LocalizedError {
-    case captureFailed
+    case permissionMissing
+    case captureFailed(String)
     case imageLoadFailed
 
     var errorDescription: String? {
         switch self {
-        case .captureFailed:
-            return "Screenshot failed, please check Screen Recording permission"
+        case .permissionMissing:
+            return "系统未识别当前 PinShot 的录屏授权。请在系统设置中允许此版本录制屏幕，再退出并重新打开 PinShot。"
+        case .captureFailed(let detail):
+            return "截图失败：" + detail
         case .imageLoadFailed:
             return "Failed to load captured image"
         }
@@ -39,10 +42,15 @@ final class ScreenshotService {
 
         try? await Task.sleep(for: .milliseconds(80))
         let quartzRect = ScreenCoordinateConverter.appKitToQuartz(appKitRect).integral
-        let status = try await runRegionCapture(rect: quartzRect, to: temporaryURL)
+        let (status, detail) = try await runRegionCapture(rect: quartzRect, to: temporaryURL)
 
         guard status == 0, FileManager.default.fileExists(atPath: temporaryURL.path) else {
-            throw ScreenshotError.captureFailed
+            if !CGPreflightScreenCaptureAccess() {
+                if !CGRequestScreenCaptureAccess() { throw ScreenshotError.permissionMissing }
+            }
+            throw ScreenshotError.captureFailed(detail.isEmpty
+                ? "系统没有生成图片（退出码 \(status)），请在单个显示器内重新框选。"
+                : detail)
         }
         guard let image = NSImage(contentsOf: temporaryURL), let cgImage = image.cgImage else {
             throw ScreenshotError.imageLoadFailed
@@ -55,7 +63,7 @@ final class ScreenshotService {
         )
     }
 
-    private func runRegionCapture(rect: CGRect, to url: URL) async throws -> Int32 {
+    private func runRegionCapture(rect: CGRect, to url: URL) async throws -> (Int32, String) {
         try await withCheckedThrowingContinuation { continuation in
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
@@ -64,7 +72,14 @@ final class ScreenshotService {
                 "-R\(Int(rect.minX)),\(Int(rect.minY)),\(Int(rect.width)),\(Int(rect.height))",
                 url.path
             ]
-            process.terminationHandler = { continuation.resume(returning: $0.terminationStatus) }
+            let errors = Pipe()
+            process.standardError = errors
+            process.terminationHandler = {
+                let data = errors.fileHandleForReading.readDataToEndOfFile()
+                let detail = String(decoding: data.prefix(512), as: UTF8.self)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                continuation.resume(returning: ($0.terminationStatus, detail))
+            }
             do {
                 try process.run()
             } catch {

@@ -13,6 +13,9 @@ struct HotKeyConfiguration: Codable, Equatable {
         display: "Command + Shift + 2"
     )
 
+    static let peek = HotKeyConfiguration(keyCode: UInt32(kVK_ANSI_H), modifiers: UInt32(controlKey | optionKey),
+                                         display: "Control + Option + H")
+
     static func from(event: NSEvent) -> HotKeyConfiguration? {
         let carbonModifiers = carbonModifiers(from: event.modifierFlags)
         guard carbonModifiers != 0 else { return nil }

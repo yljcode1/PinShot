@@ -246,11 +246,11 @@ final class SensitiveContentRedactionService: @unchecked Sendable {
         let rect: CGRect
     }
 
-    func detectRegions(in cgImage: CGImage) async -> SensitiveRedactionScanResult {
+    func detectRegions(in cgImage: CGImage) async throws -> SensitiveRedactionScanResult {
         async let textDetections = detectSensitiveText(in: cgImage)
         async let barcodeDetections = detectQRCodes(in: cgImage)
 
-        let allDetections = await textDetections + barcodeDetections
+        let allDetections = try await textDetections + barcodeDetections
         let minimumWidth = 3 / max(CGFloat(cgImage.width), 1)
         let minimumHeight = 3 / max(CGFloat(cgImage.height), 1)
         let normalizedRects = allDetections.compactMap { detection in
@@ -268,72 +268,63 @@ final class SensitiveContentRedactionService: @unchecked Sendable {
         )
     }
 
-    private func detectSensitiveText(in cgImage: CGImage) async -> [Detection] {
-        await withCheckedContinuation { continuation in
-            let request = VNRecognizeTextRequest { request, _ in
-                let observations = request.results as? [VNRecognizedTextObservation] ?? []
-                var detections: [Detection] = []
+    private func detectSensitiveText(in cgImage: CGImage) async throws -> [Detection] {
+        try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let result = Result<[Detection], Error> {
+                    let request = VNRecognizeTextRequest()
+                    request.recognitionLevel = .accurate
+                    request.usesLanguageCorrection = true
+                    request.recognitionLanguages = ["zh-Hans", "en-US"]
 
-                for observation in observations {
-                    guard let candidate = observation.topCandidates(1).first else {
-                        continue
-                    }
+                    let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
+                    try handler.perform([request])
+                    let observations = request.results ?? []
+                    var detections: [Detection] = []
 
-                    for match in SensitiveContentRedactionSupport.matches(in: candidate.string) {
-                        guard let range = Range(match.range, in: candidate.string),
-                              let rectangle = try? candidate.boundingBox(for: range),
-                              let rect = SensitiveContentRedactionSupport.normalizedRegion(rectangle.boundingBox) else {
+                    for observation in observations {
+                        guard let candidate = observation.topCandidates(1).first else {
                             continue
                         }
 
-                        detections.append(Detection(kind: match.kind, rect: rect))
+                        for match in SensitiveContentRedactionSupport.matches(in: candidate.string) {
+                            guard let range = Range(match.range, in: candidate.string),
+                                  let rectangle = try? candidate.boundingBox(for: range),
+                                  let rect = SensitiveContentRedactionSupport.normalizedRegion(rectangle.boundingBox) else {
+                                continue
+                            }
+
+                            detections.append(Detection(kind: match.kind, rect: rect))
+                        }
                     }
+
+                    return detections
                 }
-
-                continuation.resume(returning: detections)
-            }
-
-            request.recognitionLevel = .accurate
-            request.usesLanguageCorrection = true
-            request.recognitionLanguages = ["zh-Hans", "en-US"]
-
-            DispatchQueue.global(qos: .userInitiated).async {
-                let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
-                do {
-                    try handler.perform([request])
-                    return
-                } catch {
-                    continuation.resume(returning: [])
-                }
+                continuation.resume(with: result)
             }
         }
     }
 
-    private func detectQRCodes(in cgImage: CGImage) async -> [Detection] {
-        await withCheckedContinuation { continuation in
-            let request = VNDetectBarcodesRequest { request, _ in
-                let observations = request.results as? [VNBarcodeObservation] ?? []
-                let detections: [Detection] = observations
-                    .filter { $0.symbology == .qr }
-                    .compactMap { observation in
-                        guard let rect = SensitiveContentRedactionSupport.normalizedRegion(observation.boundingBox) else {
-                            return nil
-                        }
-                        return Detection(kind: .qrCode, rect: rect)
-                    }
-                continuation.resume(returning: detections)
-            }
-
-            request.symbologies = [.qr]
-
+    private func detectQRCodes(in cgImage: CGImage) async throws -> [Detection] {
+        try await withCheckedThrowingContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
-                let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
-                do {
+                let result = Result<[Detection], Error> {
+                    let request = VNDetectBarcodesRequest()
+                    request.symbologies = [.qr]
+
+                    let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
                     try handler.perform([request])
-                    return
-                } catch {
-                    continuation.resume(returning: [])
+                    let observations = request.results ?? []
+                    return observations
+                        .filter { $0.symbology == .qr }
+                        .compactMap { observation in
+                            guard let rect = SensitiveContentRedactionSupport.normalizedRegion(observation.boundingBox) else {
+                                return nil
+                            }
+                            return Detection(kind: .qrCode, rect: rect)
+                        }
                 }
+                continuation.resume(with: result)
             }
         }
     }

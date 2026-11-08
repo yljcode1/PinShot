@@ -43,6 +43,11 @@ private struct MenuHeaderView: View {
                 VStack(alignment: .leading, spacing: 5) {
                     Text("PinShot")
                         .font(.title2.bold())
+                    if let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String {
+                        Text("Version \(version)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
 
                     Text(appModel.statusMessage)
                         .font(.subheadline)
@@ -237,6 +242,16 @@ private struct MenuQuickActionsView: View {
                     }
                     .disabled(!appModel.hasCaptures)
                 }
+
+                QuickActionButton(
+                    title: "Pin Clipboard Image",
+                    systemImage: "clipboard",
+                    tint: PinShotPalette.selectionBlue
+                ) {
+                    appModel.pinClipboardImage()
+                }
+                .keyboardShortcut("v", modifiers: [.command, .shift])
+                .help("Pin a copied image. Command + Shift + V while this menu is open.")
             }
         }
         .pinShotGlassCard()
@@ -378,6 +393,8 @@ private struct FooterSection: View {
 
             VStack(alignment: .leading, spacing: 8) {
                 TipRow(systemImage: "hand.tap", text: "Single-click a pin to show its toolbar, drag the surface to move it.")
+                TipRow(systemImage: "eye.slash", text: appModel.peekAvailable ? "Hold Control + Option + H to hide pins. Release to restore." : "Control + Option + H is unavailable for temporarily hiding pins.")
+                TipRow(systemImage: "square.and.arrow.up", text: "In Normal mode, hold Option and drag a pin to export PNG with annotations to another app.")
                 TipRow(systemImage: "arrow.up.left.and.arrow.down.right", text: "Use pinch or the toolbar zoom buttons to scale a pinned capture.")
                 TipRow(systemImage: "rectangle.and.text.magnifyingglass", text: "OCR and translation results can be copied or exported as text files.")
             }
@@ -520,7 +537,7 @@ private struct HistoryRow: View {
                     Button("Save JPEG") {
                         appModel.saveImage(for: item, format: .jpeg)
                     }
-                    Button("Export Package") {
+                    Button(item.packageExportTitle) {
                         appModel.exportCapturePackage(for: item)
                     }
                     if item.hasRecognizedText {
