@@ -39,6 +39,15 @@
 
 ## 新问题模板
 
+## PS-20261109-02：CI 重复编译
+
+- 来源：Nietzsche 独立复核，主代理核实；状态：本地验证通过，云端优化待测。
+- 原流程先通过矩阵编译 Debug/Release，tests 在独立 runner 上再次编译两种配置，未复用前置产物。
+- 修复：删除重复 build job，由 tests 统一运行 validate.sh，保留两配置编译、全部自检、实际窗口与 Vision 检查。
+- 范围核对：Package.swift 只有 PinShot 产品；GitHub 分支保护 required_status_checks 的 contexts/checks 均为空，无矩阵检查名依赖。
+- 本地完整验证日志 .build/validation/20261109-135610-61016/，全部通过；现有PR两轮云端CI均通过。
+- 性能边界：消除重复编译已静态确认，总耗时改善需下一次云端运行测量；未声称测得加速比例。
+
 ## PS-20261109-01：外接屏框选及操作条重复应用屏幕偏移
 
 - 来源：用户报告外接屏无法截图；代码路径核实及 Parfit 独立复核。

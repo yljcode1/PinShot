@@ -11,33 +11,8 @@ on:
       - master
 
 jobs:
-  build:
-    runs-on: macos-15
-    strategy:
-      matrix:
-        configuration: [debug, release]
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      - name: Cache SwiftPM build artifacts
-        uses: actions/cache@v4
-        with:
-          path: |
-            .build
-            /Users/runner/Library/Developer/Xcode/DerivedData
-          key: swiftpm-${{ runner.os }}-${{ matrix.configuration }}-${{ hashFiles('**/Package.resolved') }}
-          restore-keys: |
-            swiftpm-${{ runner.os }}-${{ matrix.configuration }}-
-            swiftpm-${{ runner.os }}-
-
-      - name: Build (${{ matrix.configuration }})
-        run: swift build -c ${{ matrix.configuration }}
-
   tests:
     runs-on: macos-15
-    needs: build
 
     steps:
       - name: Check out repository
