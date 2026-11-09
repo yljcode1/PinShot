@@ -91,7 +91,98 @@ enum QualityCheckRunner {
         )
     }
 
+    private static func checkOCRCompletion(failures: inout [String]) {
+        guard let fixture = CheckSupport.makeFixtureImage() else {
+            failures.append("Missing OCR lifecycle fixture")
+            return
+        }
+        let model = AppModel.shared
+        let originalCaptures = model.captures
+        let originalStatus = model.statusMessage
+        defer {
+            model.captures = originalCaptures
+            model.statusMessage = originalStatus
+        }
+        let item = CaptureItem(image: fixture.image, cgImage: fixture.cgImage,
+                               originalRect: CGRect(x: 0, y: 0, width: 100, height: 100))
+        model.captures = [item]
+        model.statusMessage = "Newer action"
+        model.completeOCR(for: item, text: "Recognized fixture")
+        CheckSupport.expect(item.recognizedText == "Recognized fixture" && !item.isRecognizingText,
+                            "Active OCR completion updates its capture", failures: &failures)
+        CheckSupport.expect(model.statusMessage == "Newer action",
+                            "OCR does not overwrite a newer action status", failures: &failures)
+        model.captures = []
+        item.isRecognizingText = true
+        model.completeOCR(for: item, text: "Stale result")
+        CheckSupport.expect(item.recognizedText == "Recognized fixture" && item.isRecognizingText,
+                            "Closed captures reject stale OCR completion", failures: &failures)
+        model.completeCancelledChooser(for: item)
+        CheckSupport.expect(model.statusMessage == "Newer action",
+                            "Closing a chooser owner does not report a deleted capture as pinned",
+                            failures: &failures)
+        model.captures = [item]
+        model.completeCancelledChooser(for: item)
+        CheckSupport.expect(model.statusMessage == "Capture pinned",
+                            "Cancelling a chooser preserves the live capture status", failures: &failures)
+        let manager = PinPanelManager()
+        CheckSupport.expect(manager.captureID(forWindowIdentifier: nil) == nil
+                            && manager.captureID(forWindowIdentifier: UUID().uuidString) == nil,
+                            "Non-pin windows cannot receive pin magnification", failures: &failures)
+    }
+
     private static func runUnitChecks(failures: inout [String]) {
+        let primaryTop: CGFloat = 900
+        for rect in [
+            CGRect(x: -1600, y: 100, width: 300, height: 200),
+            CGRect(x: 1440, y: 50, width: 300, height: 200),
+            CGRect(x: 50, y: 1000, width: 300, height: 200),
+            CGRect(x: 50, y: -700, width: 300, height: 200)
+        ] {
+            let converted = ScreenCoordinateConverter.appKitToQuartz(rect, primaryScreenTop: primaryTop)
+            CheckSupport.expect(converted.minX == rect.minX && converted.minY == primaryTop - rect.maxY
+                                && converted.size == rect.size,
+                                "External display region preserves global position and point dimensions",
+                                failures: &failures)
+        }
+        SelectionLifecycleChecks.run(failures: &failures)
+        checkOCRCompletion(failures: &failures)
+        let clipboard = NSPasteboard.withUniqueName()
+        defer { clipboard.releaseGlobally() }
+        CheckSupport.expect(ClipboardImageReader.read(from: clipboard) == nil,
+                            "Empty clipboard does not create a pin", failures: &failures)
+        clipboard.setString("https://example.com/image.png", forType: .string)
+        CheckSupport.expect(ClipboardImageReader.read(from: clipboard) == nil,
+                            "Clipboard text and URL strings are not treated as images", failures: &failures)
+        if let fixture = CheckSupport.makeFixtureImage() {
+            for (type, data) in [(NSPasteboard.PasteboardType.png, fixture.image.pngData),
+                                 (.tiff, fixture.image.tiffRepresentation)] {
+                clipboard.clearContents()
+                guard let data else {
+                    failures.append("Could not encode clipboard fixture")
+                    continue
+                }
+                clipboard.setData(data, forType: type)
+                let restored = ClipboardImageReader.read(from: clipboard)?.cgImage
+                CheckSupport.expect(restored?.width == fixture.cgImage.width && restored?.height == fixture.cgImage.height,
+                                    "Clipboard \(type.rawValue) preserves image pixel dimensions", failures: &failures)
+            }
+        } else {
+            failures.append("Could not create clipboard image fixture")
+        }
+        let tinySize = PinPanelLayout.preferredSize(
+            originalRect: CGRect(x: 0, y: 0, width: 45, height: 30), zoom: 1,
+            visibleFrame: CGRect(x: 0, y: 0, width: 1280, height: 800),
+            showToolbar: true, showInspector: false
+        )
+        CheckSupport.expect(tinySize.width >= 176 && tinySize.height < 100,
+                            "Tiny capture has space for compact controls without a tall toolbar", failures: &failures)
+        let leftScreen = CGRect(x: -1280, y: 0, width: 1280, height: 800)
+        let edgeFrame = PinPanelLayout.clampedFrame(
+            CGRect(x: -60, y: -50, width: 176, height: 100), within: leftScreen)
+        CheckSupport.expect(leftScreen.contains(edgeFrame),
+                            "Expanded pin stays visible on a negative-coordinate screen", failures: &failures)
+
         if let defaults = CheckSupport.makeUserDefaultsSuite(
             prefix: "PinShotQuality.Unit",
             failureMessage: "Could not create isolated UserDefaults suite for unit checks.",
@@ -141,6 +232,10 @@ enum QualityCheckRunner {
 
         if let item = CheckSupport.makeAnnotatedCapture(recognizedText: "  PinShot release note  ", textOverlay: "Demo") {
             item.translatedText = "已翻译完成"
+            item.translationError = "Translation failed"
+            CheckSupport.expect(!item.hasTranslatedText && !CaptureHistoryFilter.translated.includes(item),
+                                "Failed translation is excluded from completed results and history", failures: &failures)
+            item.translationError = nil
             CheckSupport.expect(
                 CaptureHistoryFormatter.detail(for: item) == "OCR · Translated · Annotated",
                 "History formatter summarizes OCR, translation, and annotations",
@@ -152,8 +247,9 @@ enum QualityCheckRunner {
                 failures: &failures
             )
             CheckSupport.expect(
-                CaptureHistoryFormatter.suggestedFileStem(for: item).contains("PinShot release note"),
-                "History formatter derives a readable export filename",
+                CaptureHistoryFormatter.suggestedFileStem(for: item).hasPrefix("PinShot-") &&
+                    !CaptureHistoryFormatter.suggestedFileStem(for: item).contains("release note"),
+                "Masked image filenames do not expose original OCR text",
                 failures: &failures
             )
             CheckSupport.expect(CaptureHistoryFilter.text.includes(item), "Text history filter includes OCR-ready captures", failures: &failures)
@@ -186,6 +282,11 @@ enum QualityCheckRunner {
         )
 
         let appKitSelection = CGRect(x: -240, y: 120, width: 320, height: 180)
+        let wideImageRect = CapturePlacementResolver.inferredRect(
+            imagePixelSize: CGSize(width: 2000, height: 500), initialMouseLocation: .zero,
+            screenVisibleFrame: CGRect(x: 0, y: 0, width: 1280, height: 800), screenScale: 1)
+        CheckSupport.expect(wideImageRect.size == CGSize(width: 1280, height: 320),
+                            "Large clipboard image preserves aspect ratio for annotation alignment", failures: &failures)
         let selectionRoundTrip = ScreenCoordinateConverter.quartzToAppKit(
             ScreenCoordinateConverter.appKitToQuartz(appKitSelection)
         )
@@ -271,6 +372,31 @@ enum QualityCheckRunner {
     }
 
     private static func runIntegrationChecks(failures: inout [String]) {
+        let firstService = HotKeyService()
+        let competingService = HotKeyService()
+        let probe = HotKeyService()
+        defer {
+            firstService.unregister()
+            competingService.unregister()
+            probe.unregister()
+        }
+        let modifiers = UInt32(cmdKey | shiftKey | optionKey | controlKey)
+        let originalKey = HotKeyConfiguration(keyCode: UInt32(kVK_F18), modifiers: modifiers, display: "Test F18")
+        let occupiedKey = HotKeyConfiguration(keyCode: UInt32(kVK_F19), modifiers: modifiers, display: "Test F19")
+        let originalRegistered = firstService.register(configuration: originalKey) {}
+        let occupiedRegistered = competingService.register(configuration: occupiedKey) {}
+        CheckSupport.expect(originalRegistered && occupiedRegistered, "Isolated shortcut fixtures register", failures: &failures)
+        if originalRegistered && occupiedRegistered {
+            CheckSupport.expect(!firstService.register(configuration: occupiedKey) {},
+                                "Conflicting shortcut registration reports failure", failures: &failures)
+            CheckSupport.expect(!probe.register(configuration: originalKey) {},
+                                "Failed replacement leaves the original shortcut registered", failures: &failures)
+            competingService.unregister()
+            CheckSupport.expect(firstService.register(configuration: occupiedKey) {},
+                                "Shortcut replacement succeeds after conflict is removed", failures: &failures)
+            CheckSupport.expect(probe.register(configuration: originalKey) {},
+                                "Successful replacement releases the old shortcut", failures: &failures)
+        }
         guard let fixture = CheckSupport.makeFixtureImage() else {
             failures.append("Could not create image fixture for integration checks.")
             return
@@ -316,7 +442,7 @@ enum QualityCheckRunner {
 
         CheckSupport.expect((mosaicImage?.width ?? 0) > 0 && (mosaicImage?.height ?? 0) > 0, "Mosaic renderer output has valid dimensions", failures: &failures)
 
-        let jpegData = (AnnotationRenderer.render(item: item) ?? fixture.image).jpegData
+        let jpegData = AnnotationRenderer.render(item: item)?.jpegData
         CheckSupport.expect(jpegData?.isEmpty == false, "Rendered captures can be exported as JPEG data", failures: &failures)
     }
 }

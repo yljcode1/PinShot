@@ -8,7 +8,7 @@ enum AnnotationRenderer {
 
     static func render(item: CaptureItem, annotations: [ImageAnnotation]) -> NSImage? {
         guard let bitmap = renderBitmap(item: item, annotations: annotations) else {
-            return item.image
+            return nil
         }
 
         let rendered = NSImage(size: item.image.size)
@@ -119,7 +119,7 @@ enum AnnotationRenderer {
                 let nsImage = NSImage(cgImage: mosaicImage, size: frame.size)
                 nsImage.draw(in: frame)
             } else {
-                color.withAlphaComponent(0.25).setFill()
+                NSColor.black.setFill()
                 NSBezierPath(rect: frame).fill()
             }
             let border = NSBezierPath(rect: frame)

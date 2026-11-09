@@ -8,18 +8,56 @@ enum SelectionOverlayAction {
 }
 
 @MainActor
+final class CaptureActionCompletionSlot {
+    private var completion: ((SelectionOverlayAction?) -> Void)?
+
+    func register(_ completion: @escaping (SelectionOverlayAction?) -> Void) {
+        let previous = self.completion
+        self.completion = completion
+        previous?(nil)
+    }
+
+    func cancel() {
+        complete(with: nil)
+    }
+
+    func complete(with action: SelectionOverlayAction?) {
+        let pending = completion
+        // Detach before invoking user code so reentrant finish/cancel is harmless.
+        completion = nil
+        pending?(action)
+    }
+}
+
+@MainActor
 final class CaptureActionChooserService {
     private var panel: CaptureActionChooserPanel?
-    private var continuation: CheckedContinuation<SelectionOverlayAction?, Never>?
+    private let completionSlot = CaptureActionCompletionSlot()
     private var localEventMonitor: Any?
     private var globalMouseMonitor: Any?
+    private var requestID: UUID?
+
+    var isChoosingAction: Bool { panel != nil }
+
+    func cancel() {
+        finish(with: nil)
+    }
 
     func chooseAction(near anchorPoint: CGPoint) async -> SelectionOverlayAction? {
-        cleanup()
-
-        return await withCheckedContinuation { continuation in
-            self.continuation = continuation
-            showPanel(near: anchorPoint)
+        guard !Task.isCancelled else { return nil }
+        finish(with: nil)
+        let id = UUID()
+        requestID = id
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                completionSlot.register { continuation.resume(returning: $0) }
+                showPanel(near: anchorPoint)
+            }
+        } onCancel: {
+            Task { @MainActor [weak self] in
+                guard let self, self.requestID == id else { return }
+                self.cancel()
+            }
         }
     }
 
@@ -35,12 +73,13 @@ final class CaptureActionChooserService {
         )
 
         let panel = CaptureActionChooserPanel(
-            contentRect: NSRect(origin: origin, size: panelSize),
+            contentRect: NSRect(origin: .zero, size: panelSize),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false,
             screen: screen
         )
+        panel.setFrame(NSRect(origin: origin, size: panelSize), display: false)
 
         panel.level = .statusBar
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
@@ -92,8 +131,9 @@ final class CaptureActionChooserService {
     }
 
     private func finish(with action: SelectionOverlayAction?) {
-        continuation?.resume(returning: action)
+        requestID = nil
         cleanup()
+        completionSlot.complete(with: action)
     }
 
     private func cleanup() {
@@ -106,7 +146,6 @@ final class CaptureActionChooserService {
             self.globalMouseMonitor = nil
         }
 
-        continuation = nil
         panel?.orderOut(nil)
         panel = nil
     }

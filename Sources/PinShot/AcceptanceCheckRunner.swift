@@ -10,6 +10,8 @@ enum AcceptanceCheckRunner {
         testShortcutPreferenceWorkflow(failures: &failures)
         testSetupGuidePreferenceWorkflow(failures: &failures)
         testAnnotatedExportWorkflow(failures: &failures)
+        testPromisedFileDestination(failures: &failures)
+        testRedactionExportFailure(failures: &failures)
         testTranslationPlanningWorkflow(failures: &failures)
         testPinnedLayoutWorkflow(failures: &failures)
 
@@ -90,7 +92,52 @@ enum AcceptanceCheckRunner {
         }
     }
 
+    private static func testPromisedFileDestination(failures: inout [String]) {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("PinShot-Promise-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            guard let image = CheckSupport.makeFixtureImage()?.image,
+                  let data = image.pngData else {
+                failures.append("Could not create file promise fixture")
+                return
+            }
+            let delegate = PinPNGFilePromiseDelegate(pngData: data, fileName: "original.png")
+            let provider = NSFilePromiseProvider(fileType: "public.png", delegate: delegate)
+            // The receiver may rename the file to avoid a destination collision.
+            let destination = directory.appendingPathComponent("original 2.png")
+            delegate.filePromiseProvider(provider, writePromiseTo: destination) { _ in }
+            CheckSupport.expect((try? Data(contentsOf: destination)) == data,
+                                "File promise writes PNG to the receiver's exact destination URL",
+                                failures: &failures)
+        } catch {
+            failures.append("File promise fixture failed: \(error.localizedDescription)")
+        }
+    }
+
+    private static func testRedactionExportFailure(failures: inout [String]) {
+        guard let fixture = CheckSupport.makeFixtureImage() else {
+            failures.append("Could not create redaction failure fixture")
+            return
+        }
+        let item = CaptureItem(image: NSImage(size: .zero), cgImage: fixture.cgImage,
+                               originalRect: CGRect(x: 0, y: 0, width: 160, height: 100),
+                               recognizedText: "alice@example.com")
+        item.annotations = [ImageAnnotation(kind: .mosaic(rect: CGRect(x: 0, y: 0, width: 1, height: 1)),
+                                             color: .yellow, lineWidth: 3, source: .smartRedaction)]
+        CheckSupport.expect(AnnotationRenderer.render(item: item) == nil,
+                            "Failed mask rendering never returns the unredacted image", failures: &failures)
+        CheckSupport.expect(!CaptureHistoryFormatter.suggestedFileStem(for: item).contains("alice"),
+                            "Redacted filename omits sensitive OCR content", failures: &failures)
+        item.annotations = []
+        CheckSupport.expect(CaptureHistoryFormatter.suggestedFileStem(for: item).contains("alice"),
+                            "Unmasked captures retain descriptive filenames", failures: &failures)
+    }
+
     private static func testTranslationPlanningWorkflow(failures: inout [String]) {
+        let short = TranslationSupport.plan(for: "OK", englishToChinese: true)
+        CheckSupport.expect(short?.sourceLanguageIdentifier == "en" && short?.targetLanguageIdentifier == "zh-Hans",
+                            "Explicit English-to-Chinese handles short OCR text", failures: &failures)
         let englishPlan = TranslationSupport.plan(for: "Hello from PinShot, this is a translation test.")
         CheckSupport.expect(
             englishPlan?.label == "English -> Chinese (Simplified)",

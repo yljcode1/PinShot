@@ -1,17 +1,26 @@
 import Carbon
 
 final class HotKeyService {
+    private let id: UInt32
+    private var onRelease: (() -> Void)?
+    init(id: UInt32 = 1) { self.id = id }
     private var hotKeyRef: EventHotKeyRef?
     private var handlerRef: EventHandlerRef?
     private var onTrigger: (() -> Void)?
+    private var registeredConfiguration: HotKeyConfiguration?
 
-    func register(configuration: HotKeyConfiguration, handler: @escaping () -> Void) {
-        unregister()
-        onTrigger = handler
+    func register(configuration: HotKeyConfiguration, onRelease: (() -> Void)? = nil, handler: @escaping () -> Void) -> Bool {
+        if registeredConfiguration == configuration, hotKeyRef != nil {
+            onTrigger = handler
+            self.onRelease = onRelease
+            return true
+        }
 
         if handlerRef == nil {
-            var eventType = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
-            InstallEventHandler(GetApplicationEventTarget(), { _, event, userData in
+            var eventTypes = [kEventHotKeyPressed, kEventHotKeyReleased].map {
+                EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32($0))
+            }
+            let status = InstallEventHandler(GetApplicationEventTarget(), { _, event, userData in
                 guard let event else { return noErr }
                 var hotKeyID = EventHotKeyID()
                 let status = GetEventParameter(
@@ -24,28 +33,43 @@ final class HotKeyService {
                     &hotKeyID
                 )
 
-                guard status == noErr, hotKeyID.id == 1, let userData else {
-                    return noErr
+                guard status == noErr, let userData else {
+                    return OSStatus(eventNotHandledErr)
                 }
 
                 let service = Unmanaged<HotKeyService>.fromOpaque(userData).takeUnretainedValue()
-                service.onTrigger?()
+                guard hotKeyID.signature == OSType(0x50494E53), hotKeyID.id == service.id else {
+                    return OSStatus(eventNotHandledErr)
+                }
+                if GetEventKind(event) == UInt32(kEventHotKeyReleased) { service.onRelease?() }
+                else { service.onTrigger?() }
                 return noErr
-            }, 1, &eventType, Unmanaged.passUnretained(self).toOpaque(), &handlerRef)
+            }, 2, &eventTypes, Unmanaged.passUnretained(self).toOpaque(), &handlerRef)
+            guard status == noErr else { return false }
         }
 
-        let hotKeyID = EventHotKeyID(signature: OSType(0x50494E53), id: 1)
-        RegisterEventHotKey(
+        let hotKeyID = EventHotKeyID(signature: OSType(0x50494E53), id: id)
+        var newHotKeyRef: EventHotKeyRef?
+        let status = RegisterEventHotKey(
             configuration.keyCode,
             configuration.modifiers,
             hotKeyID,
             GetApplicationEventTarget(),
             0,
-            &hotKeyRef
+            &newHotKeyRef
         )
+        guard status == noErr, let newHotKeyRef else { return false }
+        // Keep the working shortcut until the replacement is registered.
+        unregister()
+        hotKeyRef = newHotKeyRef
+        registeredConfiguration = configuration
+        self.onRelease = onRelease
+        onTrigger = handler
+        return true
     }
 
     func unregister() {
+        registeredConfiguration = nil
         if let hotKeyRef {
             UnregisterEventHotKey(hotKeyRef)
             self.hotKeyRef = nil

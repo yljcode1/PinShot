@@ -58,12 +58,17 @@ final class AppModel {
     private let ocrService = OCRService()
     private let sensitiveContentRedactionService = SensitiveContentRedactionService()
     private let hotKeyService = HotKeyService()
+    private let peekKeyService = HotKeyService(id: 2)
+    private(set) var peekAvailable = false
     private let panelManager = PinPanelManager()
     private let actionChooserService = CaptureActionChooserService()
     private let preferences = AppPreferences()
     private let launchAtLoginService = LaunchAtLoginService()
     private var hotKeyMonitor: Any?
     private var magnifyMonitor: Any?
+    private var ocrTasks: [UUID: Task<Void, Never>] = [:]
+    private var captureRequestID = UUID()
+    private var chooserCaptureID: UUID?
 
     private init() {
         hotKeyConfiguration = preferences.loadHotKeyConfiguration()
@@ -73,12 +78,18 @@ final class AppModel {
     }
 
     func start() {
-        registerHotKeyHandler()
+        let hotKeyRegistered = registerHotKeyHandler()
+        peekAvailable = peekKeyService.register(configuration: .peek, onRelease: { [weak self] in
+            self?.panelManager.showAllPanels()
+        }) { [weak self] in self?.panelManager.hideAllPanels() }
         installMagnifyMonitorIfNeeded()
         applyLaunchAtLoginPreference(userInitiated: false)
         isShowingSetupGuide = preferences.showSetupGuideOnLaunch
         if isShowingSetupGuide {
             statusMessage = "Welcome to PinShot — finish the setup guide or skip it anytime"
+        }
+        if !hotKeyRegistered {
+            statusMessage = "Shortcut unavailable. Choose another shortcut in Global Hotkey."
         }
     }
 
@@ -97,6 +108,24 @@ final class AppModel {
     func reopenLatestCapture() {
         guard let first = captures.first else { return }
         reopenPinnedPanel(for: first)
+    }
+
+    func pinClipboardImage() {
+        guard let image = ClipboardImageReader.read(from: .general),
+              let cgImage = image.cgImage else {
+            statusMessage = "No image in clipboard. Copy an image first."
+            return
+        }
+        let pointer = NSEvent.mouseLocation
+        let screen = NSScreen.screens.first { $0.frame.contains(pointer) } ?? NSScreen.main
+        let rect = CapturePlacementResolver.inferredRect(
+            imagePixelSize: image.size,
+            initialMouseLocation: pointer,
+            screenVisibleFrame: screen?.visibleFrame,
+            screenScale: 1
+        )
+        stageSelectionAsPin(CapturedSelection(image: image, cgImage: cgImage, appKitRect: rect))
+        statusMessage = "Clipboard image pinned; recognizing text"
     }
 
     func copyRecognizedText(for item: CaptureItem) {
@@ -120,10 +149,22 @@ final class AppModel {
         )
     }
 
-    func copyImage(for item: CaptureItem) {
+    @discardableResult
+    func copyImage(for item: CaptureItem) -> Bool {
         panelManager.commitEditing(for: item.id)
-        let outputImage = AnnotationRenderer.render(item: item) ?? item.image
-        updateCopyStatus(copyImageToPasteboard(outputImage), successMessage: "Screenshot copied to clipboard")
+        guard let outputImage = AnnotationRenderer.render(item: item) else {
+            statusMessage = "Copy failed: cannot render annotations"
+            return false
+        }
+        let copied = copyImageToPasteboard(outputImage)
+        updateCopyStatus(copied, successMessage: "Screenshot copied to clipboard")
+        return copied
+    }
+
+    func copyAndCloseCapture(_ item: CaptureItem) {
+        guard copyImage(for: item) else { return }
+        removeCapture(item)
+        statusMessage = "图片已复制，当前贴图已关闭"
     }
 
     func copySafelyRedactedImage(for item: CaptureItem) {
@@ -134,7 +175,10 @@ final class AppModel {
 
         if item.hasSmartRedactions {
             panelManager.commitEditing(for: item.id)
-            let outputImage = AnnotationRenderer.render(item: item) ?? item.image
+            guard let outputImage = AnnotationRenderer.render(item: item) else {
+                statusMessage = "Safe copy failed: cannot render masks"
+                return
+            }
             updateCopyStatus(
                 copyImageToPasteboard(outputImage),
                 successMessage: "Safe copy ready — reviewed masks included"
@@ -151,7 +195,16 @@ final class AppModel {
         let cgImage = item.cgImage
 
         Task { [weak self] in
-            let result = await service.detectRegions(in: cgImage)
+            let result: SensitiveRedactionScanResult
+            do {
+                result = try await service.detectRegions(in: cgImage)
+            } catch {
+                guard let self, self.captures.contains(where: { $0.id == item.id }) else { return }
+                item.isDetectingSensitiveContent = false
+                self.refreshCapture(item)
+                self.statusMessage = "Sensitive-content scan failed; nothing copied. Try again."
+                return
+            }
 
             await MainActor.run { [weak self] in
                 guard let self,
@@ -174,7 +227,10 @@ final class AppModel {
 
                 self.refreshCapture(item)
                 if detectedMasks.isEmpty {
-                    let outputImage = AnnotationRenderer.render(item: item) ?? item.image
+                    guard let outputImage = AnnotationRenderer.render(item: item) else {
+                        self.statusMessage = "Safe copy failed: cannot render annotations"
+                        return
+                    }
                     self.updateCopyStatus(
                         self.copyImageToPasteboard(outputImage),
                         successMessage: "Safe copy ready — no sensitive content found"
@@ -192,6 +248,24 @@ final class AppModel {
 
     func saveImage(for item: CaptureItem) {
         saveImage(for: item, format: .png)
+    }
+
+    func dragPayload(for item: CaptureItem) -> PinDragPayload? {
+        panelManager.commitEditing(for: item.id)
+
+        guard let pngData = AnnotationRenderer.pngData(item: item),
+              let image = NSImage(data: pngData) else {
+            statusMessage = "Drag failed: cannot render PNG"
+            return nil
+        }
+
+        let stem = CaptureHistoryFormatter.suggestedFileStem(for: item)
+        statusMessage = "Dragging PNG — release over another app to copy"
+        return PinDragPayload(
+            pngData: pngData,
+            image: image,
+            fileName: "\(stem).png"
+        )
     }
 
     func saveImage(for item: CaptureItem, format: CaptureExportFormat) {
@@ -269,6 +343,9 @@ final class AppModel {
         }
 
         let panel = NSOpenPanel()
+        if item.hasMosaic {
+            panel.message = "Only the image is masked. This package may include original OCR text, translations, and metadata. For an image only, cancel and choose Save PNG."
+        }
         panel.prompt = "Export"
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
@@ -435,7 +512,16 @@ final class AppModel {
         let cgImage = item.cgImage
 
         Task { [weak self] in
-            let result = await service.detectRegions(in: cgImage)
+            let result: SensitiveRedactionScanResult
+            do {
+                result = try await service.detectRegions(in: cgImage)
+            } catch {
+                guard let self, self.captures.contains(where: { $0.id == item.id }) else { return }
+                item.isDetectingSensitiveContent = false
+                self.refreshCapture(item)
+                self.statusMessage = "Sensitive-content scan failed; nothing copied. Try again."
+                return
+            }
 
             await MainActor.run { [weak self] in
                 guard let self,
@@ -466,6 +552,8 @@ final class AppModel {
     }
 
     func removeCapture(_ item: CaptureItem) {
+        if chooserCaptureID == item.id { actionChooserService.cancel() }
+        ocrTasks.removeValue(forKey: item.id)?.cancel()
         let wasSelected = selectedCaptureID == item.id
         captures.removeAll { $0.id == item.id }
         if wasSelected {
@@ -478,6 +566,9 @@ final class AppModel {
     }
 
     func closeAllPins() {
+        actionChooserService.cancel()
+        for task in ocrTasks.values { task.cancel() }
+        ocrTasks.removeAll()
         captures.removeAll()
         selectedCaptureID = nil
         panelManager.closeAll()
@@ -556,9 +647,13 @@ final class AppModel {
             return
         }
 
+        guard registerHotKeyHandler(configuration: configuration) else {
+            stopHotKeyRecording()
+            statusMessage = "Shortcut unavailable; previous shortcut kept. Try another combination."
+            return
+        }
         hotKeyConfiguration = configuration
         preferences.saveHotKeyConfiguration(configuration)
-        registerHotKeyHandler()
         stopHotKeyRecording()
         statusMessage = "Shortcut updated to \(configuration.display)"
     }
@@ -570,12 +665,10 @@ final class AppModel {
             guard let self else { return event }
             let magnification = event.magnification
             let windowIdentifier = event.window?.identifier?.rawValue
-            let mouseLocation = NSEvent.mouseLocation
             let handled = MainActor.assumeIsolated {
                 self.handleMagnifyEvent(
                     magnification: magnification,
-                    windowIdentifier: windowIdentifier,
-                    mouseLocation: mouseLocation
+                    windowIdentifier: windowIdentifier
                 )
             }
             return handled ? nil : event
@@ -584,12 +677,10 @@ final class AppModel {
 
     private func handleMagnifyEvent(
         magnification: CGFloat,
-        windowIdentifier: String?,
-        mouseLocation: CGPoint
+        windowIdentifier: String?
     ) -> Bool {
         guard let item = captureForMagnifyEvent(
-            windowIdentifier: windowIdentifier,
-            mouseLocation: mouseLocation
+            windowIdentifier: windowIdentifier
         ) else {
             return false
         }
@@ -604,15 +695,9 @@ final class AppModel {
     }
 
     private func captureForMagnifyEvent(
-        windowIdentifier: String?,
-        mouseLocation: CGPoint
+        windowIdentifier: String?
     ) -> CaptureItem? {
         if let id = panelManager.captureID(forWindowIdentifier: windowIdentifier),
-           let capture = captures.first(where: { $0.id == id }) {
-            return capture
-        }
-
-        if let id = panelManager.captureID(containing: mouseLocation),
            let capture = captures.first(where: { $0.id == id }) {
             return capture
         }
@@ -703,16 +788,20 @@ final class AppModel {
 
     private func performOCR(for item: CaptureItem) {
         let service = ocrService
-        Task.detached(priority: .userInitiated) { [weak self] in
+        ocrTasks[item.id]?.cancel()
+        ocrTasks[item.id] = Task { [weak self] in
             let text = await service.recognizeText(cgImage: item.cgImage)
-            await MainActor.run { [weak self] in
-                guard let self else { return }
-                let value = text.isEmpty ? CaptureText.noTextRecognized : text
-                item.recognizedText = value
-                item.isRecognizingText = false
-                self.statusMessage = "Capture ready"
-            }
+            guard !Task.isCancelled, let self else { return }
+            self.ocrTasks[item.id] = nil
+            self.completeOCR(for: item, text: text)
         }
+    }
+
+    func completeOCR(for item: CaptureItem, text: String) {
+        guard captures.contains(where: { $0 === item }) else { return }
+        item.recognizedText = text.isEmpty ? CaptureText.noTextRecognized : text
+        item.isRecognizingText = false
+        // OCR readiness is displayed on each pin; do not overwrite newer actions.
     }
 
     private func makeCaptureItem(from capture: CapturedSelection) -> CaptureItem {
@@ -776,8 +865,13 @@ final class AppModel {
         statusMessage = status
     }
 
-    private func registerHotKeyHandler() {
-        hotKeyService.register(configuration: hotKeyConfiguration) { [weak self] in
+    func completeCancelledChooser(for item: CaptureItem) {
+        guard captures.contains(where: { $0 === item }) else { return }
+        statusMessage = "Capture pinned"
+    }
+
+    private func registerHotKeyHandler(configuration: HotKeyConfiguration? = nil) -> Bool {
+        hotKeyService.register(configuration: configuration ?? hotKeyConfiguration) { [weak self] in
             Task { @MainActor [weak self] in
                 await self?.captureAndChooseAction()
             }
@@ -809,13 +903,18 @@ final class AppModel {
     }
 
     private func performCapture(mode: CaptureMode) async {
+        let requestID = UUID()
+        captureRequestID = requestID
+        actionChooserService.cancel()
         statusMessage = mode.initialStatus
 
         do {
             guard let capture = try await screenshotService.captureUserSelection() else {
+                guard captureRequestID == requestID else { return }
                 statusMessage = mode.cancelStatus
                 return
             }
+            guard captureRequestID == requestID else { return }
 
             switch mode {
             case .chooseAction:
@@ -823,14 +922,23 @@ final class AppModel {
                 statusMessage = "Capture pinned; choose Quick Edit, Pin, or Copy"
 
                 await Task.yield()
+                guard captureRequestID == requestID,
+                      captures.contains(where: { $0 === item }) else { return }
 
+                chooserCaptureID = item.id
+                defer {
+                    if chooserCaptureID == item.id { chooserCaptureID = nil }
+                }
                 guard let action = await actionChooserService.chooseAction(
                     near: chooserAnchorPoint(for: item, fallbackRect: capture.appKitRect)
                 ) else {
-                    statusMessage = "Capture pinned"
+                    guard captureRequestID == requestID else { return }
+                    completeCancelledChooser(for: item)
                     return
                 }
 
+                guard captureRequestID == requestID,
+                      captures.contains(where: { $0 === item }) else { return }
                 handlePresentedSelectionAction(action, for: item)
             case .pin:
                 _ = stageSelectionAsPin(capture)
@@ -839,6 +947,7 @@ final class AppModel {
                 copySelection(capture)
             }
         } catch {
+            guard captureRequestID == requestID else { return }
             statusMessage = "\(mode.failurePrefix) failed: \(error.localizedDescription)"
         }
     }
@@ -891,7 +1000,7 @@ final class AppModel {
     }
 
     private func renderedImageData(for item: CaptureItem, format: CaptureExportFormat) -> Data? {
-        let outputImage = AnnotationRenderer.render(item: item) ?? item.image
+        guard let outputImage = AnnotationRenderer.render(item: item) else { return nil }
 
         switch format {
         case .png:

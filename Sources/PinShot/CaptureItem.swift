@@ -12,6 +12,7 @@ final class CaptureItem: Identifiable {
     let createdAt = Date()
     var recognizedText: String
     var translatedText = ""
+    var translationError: String?
     var translationLabel = ""
     var isRecognizingText = true
     var isTranslating = false
@@ -31,7 +32,7 @@ final class CaptureItem: Identifiable {
     }
 
     var hasTranslatedText: Bool {
-        !translatedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isTranslating
+        translationError == nil && !translatedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isTranslating
     }
 
     var hasAnnotations: Bool {
@@ -44,6 +45,14 @@ final class CaptureItem: Identifiable {
 
     var hasSmartRedactions: Bool {
         annotations.contains { $0.source == .smartRedaction }
+    }
+
+    var hasMosaic: Bool {
+        annotations.contains { if case .mosaic = $0.kind { return true }; return false }
+    }
+
+    var packageExportTitle: String {
+        hasMosaic ? "Full Package (Includes Original Text)" : "Export Package"
     }
 
     var smartRedactionCount: Int {

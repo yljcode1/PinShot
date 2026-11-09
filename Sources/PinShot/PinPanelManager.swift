@@ -4,12 +4,13 @@ import SwiftUI
 @MainActor
 final class PinPanelManager {
     private var panels: [UUID: PinPanel] = [:]
+    private var hiddenOrder: [UUID]?
 
     func present(item: CaptureItem, appModel: AppModel) {
         if let panel = panels[item.id],
            panel.contentViewController is NSHostingController<PinPreviewView> {
             updatePanel(panel, with: item, appModel: appModel)
-            panel.orderFrontRegardless()
+            if hiddenOrder == nil { panel.orderFrontRegardless() }
             return
         }
 
@@ -43,7 +44,8 @@ final class PinPanelManager {
             appModel: appModel,
             topLeft: CGPoint(x: item.originalRect.minX, y: item.originalRect.maxY)
         )
-        panel.orderFrontRegardless()
+        if hiddenOrder != nil { hiddenOrder?.insert(item.id, at: 0) }
+        else { panel.orderFrontRegardless() }
     }
 
     func updateOpacity(for item: CaptureItem) {
@@ -56,6 +58,7 @@ final class PinPanelManager {
     }
 
     func bringToFront(for id: UUID) {
+        guard hiddenOrder == nil else { return }
         guard let panel = panels[id] else { return }
         panel.orderFrontRegardless()
         panel.makeKey()
@@ -68,15 +71,22 @@ final class PinPanelManager {
     }
 
     func hideAllPanels() {
+        guard hiddenOrder == nil else { return }
+        let orderedIDs = NSApp.orderedWindows.compactMap { $0.isVisible ? captureID(for: $0) : nil }
+        let recordedIDs = Set(orderedIDs)
+        let remainingIDs = panels.compactMap { id, panel in
+            panel.isVisible && !recordedIDs.contains(id) ? id : nil
+        }.sorted { $0.uuidString < $1.uuidString }
+        hiddenOrder = orderedIDs + remainingIDs
         for panel in panels.values {
             panel.orderOut(nil)
         }
     }
 
     func showAllPanels() {
-        for panel in panels.values {
-            panel.orderFrontRegardless()
-        }
+        guard let order = hiddenOrder else { return }
+        hiddenOrder = nil
+        for id in order.reversed() { panels[id]?.orderFrontRegardless() }
     }
 
     func closePanel(for id: UUID) {
@@ -104,17 +114,16 @@ final class PinPanelManager {
     }
 
     func captureID(forWindowIdentifier identifier: String?) -> UUID? {
-        guard let identifier,
+        guard hiddenOrder == nil,
+              let identifier,
               let id = UUID(uuidString: identifier),
-              panels[id] != nil else {
+              let panel = panels[id],
+              panel.isVisible,
+              panel.isOnActiveSpace else {
             return nil
         }
 
         return id
-    }
-
-    func captureID(containing screenPoint: CGPoint) -> UUID? {
-        panels.first(where: { $0.value.frame.contains(screenPoint) })?.key
     }
 
     func frame(for id: UUID) -> CGRect? {
@@ -135,13 +144,14 @@ final class PinPanelManager {
         panel.alphaValue = item.opacity
         panel.isMovableByWindowBackground = false
 
-        let size = preferredPanelSize(for: item, in: panel)
+        let layoutScreen = screenForLayout(of: item, panel: topLeft == nil ? panel : nil)
+        let size = preferredPanelSize(for: item, visibleFrame: layoutScreen?.visibleFrame)
         let targetTopLeft = topLeft ?? CGPoint(x: panel.frame.minX, y: panel.frame.maxY)
-        setFrame(panel, size: size, topLeft: targetTopLeft)
+        setFrame(panel, size: size, topLeft: targetTopLeft, visibleFrame: layoutScreen?.visibleFrame)
     }
 
-    private func preferredPanelSize(for item: CaptureItem, in panel: NSPanel? = nil) -> NSSize {
-        let visibleFrame = screenForLayout(of: item, panel: panel)?.visibleFrame
+    private func preferredPanelSize(for item: CaptureItem, visibleFrame: CGRect? = nil) -> NSSize {
+        let visibleFrame = visibleFrame ?? screenForLayout(of: item, panel: nil)?.visibleFrame
             ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
         let size = PinPanelLayout.preferredSize(
             originalRect: item.originalRect,
@@ -163,10 +173,13 @@ final class PinPanelManager {
         return NSScreen.screens.first(where: { $0.frame.contains(midpoint) }) ?? NSScreen.main
     }
 
-    private func setFrame(_ panel: NSPanel, size: NSSize, topLeft: CGPoint) {
+    private func setFrame(_ panel: NSPanel, size: NSSize, topLeft: CGPoint, visibleFrame: CGRect?) {
         let targetY = topLeft.y - size.height
 
-        let frame = NSRect(x: topLeft.x, y: targetY, width: size.width, height: size.height)
+        var frame = NSRect(x: topLeft.x, y: targetY, width: size.width, height: size.height)
+        if let visibleFrame {
+            frame = PinPanelLayout.clampedFrame(frame, within: visibleFrame)
+        }
         guard panel.frame.integral != frame.integral else { return }
         panel.setFrame(frame, display: true, animate: false)
     }

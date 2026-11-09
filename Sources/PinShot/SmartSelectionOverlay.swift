@@ -5,6 +5,19 @@ import ApplicationServices
 final class SmartSelectionOverlayService {
     private var session: SmartSelectionSession?
 
+    static func makePanel(frame: CGRect, screen: NSScreen) -> NSPanel {
+        let panel = SmartSelectionPanel(
+            contentRect: CGRect(origin: .zero, size: frame.size),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false,
+            screen: screen
+        )
+        // The initializer uses screen-relative coordinates; set the global frame explicitly.
+        panel.setFrame(frame, display: false)
+        return panel
+    }
+
     func selectRegion() async -> CGRect? {
         if let session {
             session.cancel()
@@ -25,7 +38,7 @@ final class SmartSelectionOverlayService {
 private final class SmartSelectionSession {
     private let onFinish: (CGRect?) -> Void
     private let detector = SmartSelectionDetector()
-    private var panels: [SmartSelectionPanel] = []
+    private var panels: [NSPanel] = []
     private var views: [SmartSelectionView] = []
     private var candidates: [CGRect] = []
     private var candidateIndex = 0
@@ -42,13 +55,7 @@ private final class SmartSelectionSession {
         guard !NSScreen.screens.isEmpty else { finish(nil); return }
 
         for screen in NSScreen.screens {
-            let panel = SmartSelectionPanel(
-                contentRect: screen.frame,
-                styleMask: [.borderless, .nonactivatingPanel],
-                backing: .buffered,
-                defer: false,
-                screen: screen
-            )
+            let panel = SmartSelectionOverlayService.makePanel(frame: screen.frame, screen: screen)
             let view = SmartSelectionView(frame: CGRect(origin: .zero, size: screen.frame.size))
             view.screenFrame = screen.frame
             view.onHover = { [weak self] point, smartSelectionEnabled in

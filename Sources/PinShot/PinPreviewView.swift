@@ -5,6 +5,7 @@ struct PinPreviewView: View {
     @Bindable var item: CaptureItem
     @State private var pendingTranslationText = ""
     @State private var pendingTranslationPlan: TranslationPlan?
+    @State private var isDraggingImageOut = false
 
     private let selectionColor = Color(red: 0.34, green: 0.63, blue: 1.0)
 
@@ -61,12 +62,14 @@ struct PinPreviewView: View {
             text: pendingTranslationText,
             onSuccess: { translatedText in
                 item.translatedText = translatedText
+                item.translationError = nil
                 item.isTranslating = false
                 pendingTranslationPlan = nil
                 appModel.statusMessage = "Translation complete"
             },
             onFailure: { errorDescription in
-                item.translatedText = "Translation failed: \(errorDescription)"
+                item.translatedText = ""
+                item.translationError = "Translation failed: \(errorDescription)"
                 item.isTranslating = false
                 pendingTranslationPlan = nil
                 appModel.statusMessage = "Translation failed"
@@ -134,18 +137,36 @@ struct PinPreviewView: View {
                         appModel.toggleToolbar(for: item)
                     },
                     onDoubleClick: {
-                        appModel.removeCapture(item)
+                        appModel.copyAndCloseCapture(item)
                     },
                     onSecondaryClick: {
                         appModel.toggleToolbar(for: item)
+                    },
+                    dragPayload: {
+                        appModel.dragPayload(for: item)
+                    },
+                    onExternalDragStateChange: { isDragging in
+                        isDraggingImageOut = isDragging
                     }
                 )
+            }
+        }
+        .overlay(alignment: .bottom) {
+            if isDraggingImageOut {
+                Label("Export PNG with annotations", systemImage: "photo.badge.arrow.down")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 7)
+                    .background(.black.opacity(0.78), in: Capsule())
+                    .padding(10)
+                    .allowsHitTesting(false)
             }
         }
         .overlay(alignment: .topTrailing) {
             if isSelected {
                 floatingSurfaceControls
-                    .padding(8)
+                    .padding(usesCompactToolbar ? 2 : 8)
             }
         }
         .aspectRatio(captureAspectRatio, contentMode: .fit)
@@ -153,7 +174,7 @@ struct PinPreviewView: View {
             maxWidth: maximumDisplayedCaptureSize.width,
             maxHeight: maximumDisplayedCaptureSize.height
         )
-        .frame(maxWidth: .infinity, alignment: .top)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
     }
 
     @ViewBuilder
@@ -169,6 +190,8 @@ struct PinPreviewView: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 10) {
                 ToolbarGroupCard(title: "Panels") {
+                    HStack(spacing: 6) {
+                    englishToChineseButton
                     Button {
                         appModel.toggleInspector(for: item)
                     } label: {
@@ -176,6 +199,7 @@ struct PinPreviewView: View {
                     }
                     .buttonStyle(PinCapsuleButtonStyle(prominence: item.showInspector ? .primary : .secondary))
                     .help(item.showInspector ? "Hide OCR and translation results" : "Open OCR and translation results")
+                    }
                 }
 
                 ToolbarGroupCard(title: "Tools") {
@@ -329,7 +353,7 @@ struct PinPreviewView: View {
                             Button("Save JPEG") {
                                 appModel.saveImage(for: item, format: .jpeg)
                             }
-                            Button("Export Package") {
+                            Button(item.packageExportTitle) {
                                 appModel.exportCapturePackage(for: item)
                             }
                             if item.hasRecognizedText {
@@ -375,71 +399,53 @@ struct PinPreviewView: View {
     }
 
     private var compactToolbarView: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 4) {
             Button {
-                appModel.toggleInspector(for: item)
+                appModel.copyImage(for: item)
             } label: {
-                Image(systemName: item.showInspector ? "text.bubble.fill" : "text.bubble")
-            }
-            .buttonStyle(PinToolbarButtonStyle(isActive: item.showInspector))
-            .help(item.showInspector ? "Hide OCR and translation results" : "Open OCR and translation results")
-
-            Menu {
-                compactToolMenuContent
-            } label: {
-                Image(systemName: item.annotationTool == .none ? "pencil.tip.crop.circle" : item.annotationTool.systemImage)
-            }
-            .buttonStyle(PinToolbarButtonStyle(isActive: item.annotationTool != .none))
-            .help("Choose annotation tool")
-
-            Menu {
-                compactColorMenuContent
-            } label: {
-                Circle()
-                    .fill(Color(item.annotationColor.nsColor))
-                    .frame(width: 14, height: 14)
-                    .padding(10)
+                Image(systemName: "doc.on.doc")
             }
             .buttonStyle(PinToolbarButtonStyle(isActive: false))
-            .help("Choose annotation color")
-
-            Button {
-                appModel.applySmartRedaction(for: item)
-            } label: {
-                Image(systemName: item.isDetectingSensitiveContent ? "hourglass" : "eye.slash")
-            }
-            .buttonStyle(PinToolbarButtonStyle(isActive: item.smartRedactionCount > 0))
-            .disabled(item.isDetectingSensitiveContent)
-            .help("Detect phone numbers, emails, links, IDs, and QR codes, then add mosaic masks")
-
-            Button {
-                appModel.zoomOut(for: item)
-            } label: {
-                Image(systemName: "minus")
-            }
-            .buttonStyle(PinToolbarButtonStyle(isActive: false))
-            .help("Zoom out")
-
-            Text("\(Int(item.zoom * 100))%")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .frame(minWidth: 42)
-
-            Button {
-                appModel.zoomIn(for: item)
-            } label: {
-                Image(systemName: "plus")
-            }
-            .buttonStyle(PinToolbarButtonStyle(isActive: false))
-            .help("Zoom in")
+            .help("Copy image including annotations")
 
             Menu {
+                Button("Zoom In") { appModel.zoomIn(for: item) }
+                Button("Zoom Out") { appModel.zoomOut(for: item) }
+                Button("Reset to 100%") { appModel.resetZoom(for: item) }
+            } label: {
+                Image(systemName: "plus.magnifyingglass")
+            }
+            .menuIndicator(.hidden)
+            .buttonStyle(PinToolbarButtonStyle(isActive: false))
+            .help("Zoom: \(Int(item.zoom * 100))%")
+
+            Menu {
+                Button(item.showInspector ? "Hide Text Results" : "OCR and Translation") {
+                    appModel.toggleInspector(for: item)
+                }
+                Menu("Annotation Tool") { compactToolMenuContent }
+                englishToChineseButton
+                Menu("Annotation Color") { compactColorMenuContent }
+                Button("Smart Mask") { appModel.applySmartRedaction(for: item) }
+                    .disabled(item.isDetectingSensitiveContent)
+                Divider()
                 compactActionMenuContent
+                Divider()
+                Text("Normal mode: Option-drag to export PNG")
             } label: {
                 Image(systemName: "ellipsis.circle")
             }
+            .menuIndicator(.hidden)
             .buttonStyle(PinToolbarButtonStyle(isActive: false))
-            .help("More actions")
+            .help("Annotation tools, text results, and export")
+
+            Button {
+                appModel.removeCapture(item)
+            } label: {
+                Image(systemName: "xmark")
+            }
+            .buttonStyle(PinToolbarButtonStyle(isActive: false))
+            .help("Close this pin")
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
@@ -452,6 +458,7 @@ struct PinPreviewView: View {
 
     private var floatingSurfaceControls: some View {
         HStack(spacing: 6) {
+            if !usesCompactToolbar {
             Button {
                 appModel.toggleToolbar(for: item)
             } label: {
@@ -463,6 +470,7 @@ struct PinPreviewView: View {
             }
             .buttonStyle(.plain)
             .help(item.showToolbar ? "Hide editing controls" : "Show editing controls")
+            }
 
             Button {
                 appModel.removeCapture(item)
@@ -609,8 +617,15 @@ struct PinPreviewView: View {
         appModel.refreshCapture(item)
     }
 
+    private var englishToChineseButton: some View {
+        Button("英译中") { beginTranslation(englishToChinese: true) }
+            .disabled(!canStartTranslation)
+            .help(item.isRecognizingText ? "Waiting for OCR" : translationButtonHelpText)
+    }
+
     private var canStartTranslation: Bool {
         TranslationSupport.isRuntimeSupported
+            && !item.isTranslating
             && !item.isRecognizingText
             && !item.recognizedText.isEmpty
             && item.recognizedText != CaptureText.noTextRecognized
@@ -625,6 +640,7 @@ struct PinPreviewView: View {
     }
 
     private var translationPlaceholderText: String {
+        if let error = item.translationError { return error }
         if TranslationSupport.isRuntimeSupported {
             return "Use Translate to generate a translated result"
         }
@@ -632,7 +648,7 @@ struct PinPreviewView: View {
         return TranslationSupport.unavailableMessage
     }
 
-    private func beginTranslation() {
+    private func beginTranslation(englishToChinese: Bool = false) {
         guard TranslationSupport.isRuntimeSupported else {
             item.isTranslating = false
             pendingTranslationPlan = nil
@@ -640,14 +656,16 @@ struct PinPreviewView: View {
             return
         }
 
-        guard let plan = TranslationSupport.plan(for: item.recognizedText) else {
+        guard let plan = TranslationSupport.plan(for: item.recognizedText, englishToChinese: englishToChinese) else {
             appModel.statusMessage = "No text to translate"
             return
         }
 
         item.showInspector = true
+        appModel.refreshCapture(item)
         item.isTranslating = true
         item.translatedText = ""
+        item.translationError = nil
         item.translationLabel = plan.label
         pendingTranslationText = item.recognizedText
         pendingTranslationPlan = plan
@@ -755,7 +773,7 @@ struct PinPreviewView: View {
             appModel.saveImage(for: item, format: .jpeg)
         }
 
-        Button("Export Package") {
+        Button(item.packageExportTitle) {
             appModel.exportCapturePackage(for: item)
         }
 

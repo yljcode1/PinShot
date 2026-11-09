@@ -5,43 +5,46 @@ on:
     branches:
       - dev
       - master
+      - 'codex/**'
   pull_request:
     branches:
       - master
 
 jobs:
-  build:
-    runs-on: macos-15
-    strategy:
-      matrix:
-        configuration: [debug, release]
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      - name: Cache SwiftPM build artifacts
-        uses: actions/cache@v4
-        with:
-          path: |
-            .build
-            /Users/runner/Library/Developer/Xcode/DerivedData
-          key: swiftpm-${{ runner.os }}-${{ matrix.configuration }}-${{ hashFiles('**/Package.resolved') }}
-          restore-keys: |
-            swiftpm-${{ runner.os }}-${{ matrix.configuration }}-
-            swiftpm-${{ runner.os }}-
-
-      - name: Build (${{ matrix.configuration }})
-        run: swift build -c ${{ matrix.configuration }}
-
   tests:
     runs-on: macos-15
-    needs: build
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Select committed diff base
+        shell: bash
+        env:
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PUSH_BASE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          base="${PR_BASE:-$PUSH_BASE}"
+          if [[ -z "$base" || "$base" =~ ^0+$ ]]; then
+            base="$(git hash-object -t tree /dev/null)"
+          elif ! git cat-file -e "$base^{commit}" 2>/dev/null; then
+            mkdir -p .build/validation
+            git fetch --no-tags origin "$base" 2>&1 | tee .build/validation/base-fetch.log
+            git cat-file -e "$base^{commit}" 2>&1 | tee .build/validation/base-verify.log
+          fi
+          echo "PINSHOT_DIFF_BASE=$base" >> "$GITHUB_ENV"
 
       - name: Run automated validation
         run: |
-          swift run PinShot --all-checks
+          bash scripts/validate.sh
+
+      - name: Upload validation logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: validation-logs
+          path: .build/validation/
+          if-no-files-found: ignore
