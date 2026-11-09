@@ -66,6 +66,9 @@ final class AppModel {
     private let launchAtLoginService = LaunchAtLoginService()
     private var hotKeyMonitor: Any?
     private var magnifyMonitor: Any?
+    private var ocrTasks: [UUID: Task<Void, Never>] = [:]
+    private var captureRequestID = UUID()
+    private var chooserCaptureID: UUID?
 
     private init() {
         hotKeyConfiguration = preferences.loadHotKeyConfiguration()
@@ -549,6 +552,8 @@ final class AppModel {
     }
 
     func removeCapture(_ item: CaptureItem) {
+        if chooserCaptureID == item.id { actionChooserService.cancel() }
+        ocrTasks.removeValue(forKey: item.id)?.cancel()
         let wasSelected = selectedCaptureID == item.id
         captures.removeAll { $0.id == item.id }
         if wasSelected {
@@ -561,6 +566,9 @@ final class AppModel {
     }
 
     func closeAllPins() {
+        actionChooserService.cancel()
+        for task in ocrTasks.values { task.cancel() }
+        ocrTasks.removeAll()
         captures.removeAll()
         selectedCaptureID = nil
         panelManager.closeAll()
@@ -657,12 +665,10 @@ final class AppModel {
             guard let self else { return event }
             let magnification = event.magnification
             let windowIdentifier = event.window?.identifier?.rawValue
-            let mouseLocation = NSEvent.mouseLocation
             let handled = MainActor.assumeIsolated {
                 self.handleMagnifyEvent(
                     magnification: magnification,
-                    windowIdentifier: windowIdentifier,
-                    mouseLocation: mouseLocation
+                    windowIdentifier: windowIdentifier
                 )
             }
             return handled ? nil : event
@@ -671,12 +677,10 @@ final class AppModel {
 
     private func handleMagnifyEvent(
         magnification: CGFloat,
-        windowIdentifier: String?,
-        mouseLocation: CGPoint
+        windowIdentifier: String?
     ) -> Bool {
         guard let item = captureForMagnifyEvent(
-            windowIdentifier: windowIdentifier,
-            mouseLocation: mouseLocation
+            windowIdentifier: windowIdentifier
         ) else {
             return false
         }
@@ -691,15 +695,9 @@ final class AppModel {
     }
 
     private func captureForMagnifyEvent(
-        windowIdentifier: String?,
-        mouseLocation: CGPoint
+        windowIdentifier: String?
     ) -> CaptureItem? {
         if let id = panelManager.captureID(forWindowIdentifier: windowIdentifier),
-           let capture = captures.first(where: { $0.id == id }) {
-            return capture
-        }
-
-        if let id = panelManager.captureID(containing: mouseLocation),
            let capture = captures.first(where: { $0.id == id }) {
             return capture
         }
@@ -790,16 +788,20 @@ final class AppModel {
 
     private func performOCR(for item: CaptureItem) {
         let service = ocrService
-        Task.detached(priority: .userInitiated) { [weak self] in
+        ocrTasks[item.id]?.cancel()
+        ocrTasks[item.id] = Task { [weak self] in
             let text = await service.recognizeText(cgImage: item.cgImage)
-            await MainActor.run { [weak self] in
-                guard let self else { return }
-                let value = text.isEmpty ? CaptureText.noTextRecognized : text
-                item.recognizedText = value
-                item.isRecognizingText = false
-                self.statusMessage = "Capture ready"
-            }
+            guard !Task.isCancelled, let self else { return }
+            self.ocrTasks[item.id] = nil
+            self.completeOCR(for: item, text: text)
         }
+    }
+
+    func completeOCR(for item: CaptureItem, text: String) {
+        guard captures.contains(where: { $0 === item }) else { return }
+        item.recognizedText = text.isEmpty ? CaptureText.noTextRecognized : text
+        item.isRecognizingText = false
+        // OCR readiness is displayed on each pin; do not overwrite newer actions.
     }
 
     private func makeCaptureItem(from capture: CapturedSelection) -> CaptureItem {
@@ -863,6 +865,11 @@ final class AppModel {
         statusMessage = status
     }
 
+    func completeCancelledChooser(for item: CaptureItem) {
+        guard captures.contains(where: { $0 === item }) else { return }
+        statusMessage = "Capture pinned"
+    }
+
     private func registerHotKeyHandler(configuration: HotKeyConfiguration? = nil) -> Bool {
         hotKeyService.register(configuration: configuration ?? hotKeyConfiguration) { [weak self] in
             Task { @MainActor [weak self] in
@@ -896,13 +903,18 @@ final class AppModel {
     }
 
     private func performCapture(mode: CaptureMode) async {
+        let requestID = UUID()
+        captureRequestID = requestID
+        actionChooserService.cancel()
         statusMessage = mode.initialStatus
 
         do {
             guard let capture = try await screenshotService.captureUserSelection() else {
+                guard captureRequestID == requestID else { return }
                 statusMessage = mode.cancelStatus
                 return
             }
+            guard captureRequestID == requestID else { return }
 
             switch mode {
             case .chooseAction:
@@ -910,14 +922,23 @@ final class AppModel {
                 statusMessage = "Capture pinned; choose Quick Edit, Pin, or Copy"
 
                 await Task.yield()
+                guard captureRequestID == requestID,
+                      captures.contains(where: { $0 === item }) else { return }
 
+                chooserCaptureID = item.id
+                defer {
+                    if chooserCaptureID == item.id { chooserCaptureID = nil }
+                }
                 guard let action = await actionChooserService.chooseAction(
                     near: chooserAnchorPoint(for: item, fallbackRect: capture.appKitRect)
                 ) else {
-                    statusMessage = "Capture pinned"
+                    guard captureRequestID == requestID else { return }
+                    completeCancelledChooser(for: item)
                     return
                 }
 
+                guard captureRequestID == requestID,
+                      captures.contains(where: { $0 === item }) else { return }
                 handlePresentedSelectionAction(action, for: item)
             case .pin:
                 _ = stageSelectionAsPin(capture)
@@ -926,6 +947,7 @@ final class AppModel {
                 copySelection(capture)
             }
         } catch {
+            guard captureRequestID == requestID else { return }
             statusMessage = "\(mode.failurePrefix) failed: \(error.localizedDescription)"
         }
     }

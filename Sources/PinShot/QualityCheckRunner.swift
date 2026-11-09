@@ -91,7 +91,62 @@ enum QualityCheckRunner {
         )
     }
 
+    private static func checkOCRCompletion(failures: inout [String]) {
+        guard let fixture = CheckSupport.makeFixtureImage() else {
+            failures.append("Missing OCR lifecycle fixture")
+            return
+        }
+        let model = AppModel.shared
+        let originalCaptures = model.captures
+        let originalStatus = model.statusMessage
+        defer {
+            model.captures = originalCaptures
+            model.statusMessage = originalStatus
+        }
+        let item = CaptureItem(image: fixture.image, cgImage: fixture.cgImage,
+                               originalRect: CGRect(x: 0, y: 0, width: 100, height: 100))
+        model.captures = [item]
+        model.statusMessage = "Newer action"
+        model.completeOCR(for: item, text: "Recognized fixture")
+        CheckSupport.expect(item.recognizedText == "Recognized fixture" && !item.isRecognizingText,
+                            "Active OCR completion updates its capture", failures: &failures)
+        CheckSupport.expect(model.statusMessage == "Newer action",
+                            "OCR does not overwrite a newer action status", failures: &failures)
+        model.captures = []
+        item.isRecognizingText = true
+        model.completeOCR(for: item, text: "Stale result")
+        CheckSupport.expect(item.recognizedText == "Recognized fixture" && item.isRecognizingText,
+                            "Closed captures reject stale OCR completion", failures: &failures)
+        model.completeCancelledChooser(for: item)
+        CheckSupport.expect(model.statusMessage == "Newer action",
+                            "Closing a chooser owner does not report a deleted capture as pinned",
+                            failures: &failures)
+        model.captures = [item]
+        model.completeCancelledChooser(for: item)
+        CheckSupport.expect(model.statusMessage == "Capture pinned",
+                            "Cancelling a chooser preserves the live capture status", failures: &failures)
+        let manager = PinPanelManager()
+        CheckSupport.expect(manager.captureID(forWindowIdentifier: nil) == nil
+                            && manager.captureID(forWindowIdentifier: UUID().uuidString) == nil,
+                            "Non-pin windows cannot receive pin magnification", failures: &failures)
+    }
+
     private static func runUnitChecks(failures: inout [String]) {
+        let primaryTop: CGFloat = 900
+        for rect in [
+            CGRect(x: -1600, y: 100, width: 300, height: 200),
+            CGRect(x: 1440, y: 50, width: 300, height: 200),
+            CGRect(x: 50, y: 1000, width: 300, height: 200),
+            CGRect(x: 50, y: -700, width: 300, height: 200)
+        ] {
+            let converted = ScreenCoordinateConverter.appKitToQuartz(rect, primaryScreenTop: primaryTop)
+            CheckSupport.expect(converted.minX == rect.minX && converted.minY == primaryTop - rect.maxY
+                                && converted.size == rect.size,
+                                "External display region preserves global position and point dimensions",
+                                failures: &failures)
+        }
+        SelectionLifecycleChecks.run(failures: &failures)
+        checkOCRCompletion(failures: &failures)
         let clipboard = NSPasteboard.withUniqueName()
         defer { clipboard.releaseGlobally() }
         CheckSupport.expect(ClipboardImageReader.read(from: clipboard) == nil,

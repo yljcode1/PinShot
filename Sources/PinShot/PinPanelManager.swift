@@ -72,7 +72,12 @@ final class PinPanelManager {
 
     func hideAllPanels() {
         guard hiddenOrder == nil else { return }
-        hiddenOrder = NSApp.orderedWindows.compactMap { $0.isVisible ? captureID(for: $0) : nil }
+        let orderedIDs = NSApp.orderedWindows.compactMap { $0.isVisible ? captureID(for: $0) : nil }
+        let recordedIDs = Set(orderedIDs)
+        let remainingIDs = panels.compactMap { id, panel in
+            panel.isVisible && !recordedIDs.contains(id) ? id : nil
+        }.sorted { $0.uuidString < $1.uuidString }
+        hiddenOrder = orderedIDs + remainingIDs
         for panel in panels.values {
             panel.orderOut(nil)
         }
@@ -109,17 +114,16 @@ final class PinPanelManager {
     }
 
     func captureID(forWindowIdentifier identifier: String?) -> UUID? {
-        guard let identifier,
+        guard hiddenOrder == nil,
+              let identifier,
               let id = UUID(uuidString: identifier),
-              panels[id] != nil else {
+              let panel = panels[id],
+              panel.isVisible,
+              panel.isOnActiveSpace else {
             return nil
         }
 
         return id
-    }
-
-    func captureID(containing screenPoint: CGPoint) -> UUID? {
-        panels.first(where: { $0.value.frame.contains(screenPoint) })?.key
     }
 
     func frame(for id: UUID) -> CGRect? {

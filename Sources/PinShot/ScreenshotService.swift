@@ -93,6 +93,10 @@ enum ScreenCoordinateConverter {
     static var primaryScreenTop: CGFloat { NSScreen.screens.first?.frame.maxY ?? 0 }
 
     static func appKitToQuartz(_ rect: CGRect) -> CGRect {
+        appKitToQuartz(rect, primaryScreenTop: primaryScreenTop)
+    }
+
+    static func appKitToQuartz(_ rect: CGRect, primaryScreenTop: CGFloat) -> CGRect {
         CGRect(x: rect.minX, y: primaryScreenTop - rect.maxY, width: rect.width, height: rect.height)
     }
 
